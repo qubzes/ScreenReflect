@@ -71,29 +71,20 @@ class VideoEncoder(
     }
 
     private fun setupEncoder() {
-        Log.i(TAG, "🎬 Original screen: ${width}x${height}, aligned: ${alignedWidth}x${alignedHeight}")
-        Log.i(TAG, "🎬 Setting up video encoder: ${alignedWidth}x${alignedHeight} @ ${FRAME_RATE}fps, bitrate: ${bitRate / 1_000_000f} Mbps")
+        Log.i(TAG, "Setting up video encoder: ${alignedWidth}x${alignedHeight} @ ${FRAME_RATE}fps, ${bitRate / 1_000_000f}Mbps")
 
-        // Create video format with aligned dimensions - OPTIMIZED FOR ZERO LAG
+        // Create video format with aligned dimensions
         val format = MediaFormat.createVideoFormat(MIME_TYPE, alignedWidth, alignedHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
-
-            // ULTRA-LOW LATENCY SETTINGS
-            setInteger(MediaFormat.KEY_LOW_LATENCY, 1)  // Enable low latency mode
-            setInteger(MediaFormat.KEY_PRIORITY, 0)  // Real-time priority
-            setInteger(MediaFormat.KEY_LATENCY, 0)  // Request lowest possible latency
-
-            // Use CBR (Constant Bitrate) for predictable performance
+            setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            setInteger(MediaFormat.KEY_PRIORITY, 0)
+            setInteger(MediaFormat.KEY_LATENCY, 0)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-
-            // Baseline profile for fastest encoding/decoding
             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-
-            // Intra-refresh for lower latency (no periodic I-frames)
-            setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, 10)  // Refresh every 10 frames instead of full I-frame
+            setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, 10)
         }
 
         // Create and configure codec
@@ -103,7 +94,7 @@ class VideoEncoder(
             start()
         }
 
-        Log.i(TAG, "✅ Video encoder configured: ${alignedWidth}x${alignedHeight} @ ${FRAME_RATE}fps, bitrate: ${bitRate / 1_000_000f} Mbps")
+        Log.i(TAG, "Video encoder configured successfully")
 
         // Create virtual display - must match encoder dimensions
         virtualDisplay = mediaProjection.createVirtualDisplay(
@@ -117,17 +108,14 @@ class VideoEncoder(
             null
         )
 
-        Log.i(TAG, "✅ Virtual display created: ${alignedWidth}x${alignedHeight} @ ${dpi}dpi (${width}x${height} original, ${height - alignedHeight}px cropped)")
+        Log.i(TAG, "Virtual display created: ${alignedWidth}x${alignedHeight}")
         running = true
 
-        // Give encoder a moment to stabilize before requesting keyframe
+        // Request immediate keyframe for faster startup
         Thread.sleep(100)
-
-        // Request immediate I-frame for faster startup
         requestKeyFrame()
         Thread.sleep(50)
-        requestKeyFrame()  // Request twice to ensure we get it
-        Log.i(TAG, "🚀 Requested immediate I-frames for instant startup")
+        requestKeyFrame()
     }
 
     private fun encodeLoop() {
@@ -142,40 +130,30 @@ class VideoEncoder(
                         // No output available yet
                     }
                     encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        val newFormat = mediaCodec?.outputFormat
-                        Log.i(TAG, "Output format changed: $newFormat")
+                        // Output format changed - codec initialized
                     }
                     encoderStatus >= 0 -> {
                         val encodedData = mediaCodec?.getOutputBuffer(encoderStatus)
 
                         if (encodedData != null && bufferInfo.size > 0) {
-                            // Check if this is codec configuration data (SPS/PPS)
                             if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                                Log.i(TAG, "Got codec config (SPS/PPS): ${bufferInfo.size} bytes")
-
-                                // Extract and send config packet
                                 val configData = ByteArray(bufferInfo.size)
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 encodedData.get(configData)
-
                                 networkServer.sendPacket(NetworkServer.PACKET_TYPE_CONFIG, configData)
                             } else {
-                                // Regular video frame
                                 val frameData = ByteArray(bufferInfo.size)
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 encodedData.get(frameData)
-
                                 networkServer.sendPacket(NetworkServer.PACKET_TYPE_VIDEO, frameData)
                             }
                         }
 
                         mediaCodec?.releaseOutputBuffer(encoderStatus, false)
 
-                        // Check for end of stream
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            Log.i(TAG, "End of stream reached")
                             running = false
                         }
                     }
@@ -191,17 +169,12 @@ class VideoEncoder(
         running = false
     }
 
-    /**
-     * Request an immediate keyframe (I-frame) from the encoder
-     * Useful when a new client connects to get video faster
-     */
     fun requestKeyFrame() {
         try {
             mediaCodec?.let { codec ->
                 val params = android.os.Bundle()
                 params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
                 codec.setParameters(params)
-                Log.d(TAG, "Requested sync frame (keyframe)")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error requesting keyframe", e)
@@ -209,7 +182,6 @@ class VideoEncoder(
     }
 
     private fun release() {
-        Log.i(TAG, "Releasing video encoder")
 
         try {
             virtualDisplay?.release()

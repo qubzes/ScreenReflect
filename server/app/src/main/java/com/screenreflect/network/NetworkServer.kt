@@ -82,18 +82,15 @@ class NetworkServer : Thread() {
 
             // Send cached config packets immediately if available
             cachedConfigPacket?.let { configData ->
-                Log.i(TAG, "Sending cached VIDEO CONFIG packet to new client (${configData.size} bytes)")
                 sendPacketInternal(PACKET_TYPE_CONFIG, configData)
             }
 
             cachedAudioConfigPacket?.let { audioConfigData ->
-                Log.i(TAG, "Sending cached AUDIO CONFIG packet to new client (${audioConfigData.size} bytes)")
                 sendPacketInternal(PACKET_TYPE_AUDIO_CONFIG, audioConfigData)
             }
 
             // Notify that client connected (to request keyframe)
             onClientConnected?.invoke()
-            Log.d(TAG, "Triggered client connected callback")
 
             // Start packet sender thread
             Thread {
@@ -130,12 +127,10 @@ class NetworkServer : Thread() {
         // Cache config packets for new clients
         if (type == PACKET_TYPE_CONFIG) {
             cachedConfigPacket = data
-            Log.d(TAG, "Cached VIDEO CONFIG packet (${data.size} bytes)")
         }
 
         if (type == PACKET_TYPE_AUDIO_CONFIG) {
             cachedAudioConfigPacket = data
-            Log.d(TAG, "Cached AUDIO CONFIG packet (${data.size} bytes)")
         }
 
         if (running && outputStream != null) {
@@ -146,11 +141,7 @@ class NetworkServer : Thread() {
             }
 
             // For video/audio frames: drop if queue is full (prevents lag buildup)
-            if (!packetQueue.offer(Packet(type, data))) {
-                if (type == PACKET_TYPE_VIDEO) {
-                    Log.v(TAG, "⚠️ Dropped video frame - queue full (preventing lag)")
-                }
-            }
+            packetQueue.offer(Packet(type, data))
         }
     }
 

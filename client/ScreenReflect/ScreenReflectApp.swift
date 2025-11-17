@@ -8,7 +8,6 @@
 import SwiftUI
 import Combine
 import CoreVideo
-import os.log
 
 /// Main application entry point
 /// Manages menu bar interface and player windows
@@ -20,8 +19,6 @@ struct ScreenReflectApp: App {
     @StateObject private var browser = BonjourBrowser()
     @State private var playerWindows: [UUID: NSWindow] = [:]
     @State private var connectingDevices: Set<UUID> = []
-
-    private let logger = Logger(subsystem: "com.screenreflect.ScreenReflect", category: "App")
 
     // MARK: - Scene
 
@@ -152,6 +149,34 @@ struct ScreenReflectApp: App {
         )
 
         // Show window immediately and activate
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Resizes window to match video dimensions with proper aspect ratio
+    /// Handles both portrait and landscape orientations
+    private func resizeWindow(_ window: NSWindow, toVideoSize videoSize: NSSize) {
+        let currentFrame = window.frame
+        let currentContentSize = window.contentView?.frame.size ?? .zero
+
+        // Calculate window chrome (title bar and borders)
+        let chromeWidth = currentFrame.width - currentContentSize.width
+        let chromeHeight = currentFrame.height - currentContentSize.height
+
+        // Calculate new frame size including chrome
+        let newFrameWidth = videoSize.width + chromeWidth
+        let newFrameHeight = videoSize.height + chromeHeight
+
+        var newFrame = currentFrame
+        newFrame.size = NSSize(width: newFrameWidth, height: newFrameHeight)
+
+        // Lock aspect ratio to video dimensions
+        let aspectRatio = videoSize.width / videoSize.height
+        window.contentAspectRatio = NSSize(width: aspectRatio * 100, height: 100)
+
+        // Animate resize and bring to front
+        window.setFrame(newFrame, display: true, animate: true)
+        window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
