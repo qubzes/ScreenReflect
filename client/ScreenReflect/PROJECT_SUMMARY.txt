@@ -1,0 +1,196 @@
+╔═══════════════════════════════════════════════════════════════╗
+║         SCREEN REFLECT macOS CLIENT - PROJECT SUMMARY          ║
+╚═══════════════════════════════════════════════════════════════╝
+
+PROJECT STRUCTURE
+─────────────────
+ScreenReflect/
+├── ScreenReflect.xcodeproj/     # Xcode project file
+│   └── project.pbxproj
+├── ScreenReflect/               # Source code
+│   ├── ScreenReflectApp.swift   # Main entry point (MenuBarExtra)
+│   ├── ContentView.swift        # Device list UI
+│   ├── BonjourBrowser.swift     # mDNS service discovery
+│   ├── StreamClient.swift       # TCP client & protocol parser
+│   ├── H264Decoder.swift        # VideoToolbox H.264 decoder
+│   ├── AACDecoder.swift         # CoreAudio AAC decoder
+│   ├── VideoPlayerView.swift    # AVSampleBufferDisplayLayer rendering
+│   ├── Info.plist              # App configuration
+│   ├── ScreenReflect.entitlements  # Sandbox entitlements
+│   └── Assets.xcassets/        # App assets
+├── README.md                    # Main documentation
+├── INTEGRATION.md              # Android server integration guide
+└── DEVELOPMENT.md              # Development & testing guide
+
+ARCHITECTURE SUMMARY
+────────────────────
+┌─────────────────┐
+│  Menu Bar Icon  │ (User clicks)
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│  ContentView    │ (Shows discovered devices)
+│  Device List    │
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│ BonjourBrowser  │ → Discovers Android devices via mDNS
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│  StreamClient   │ → Connects via TCP, parses packets
+└────────┬────────┘
+         ↓
+    ┌────┴────┐
+    ↓         ↓
+┌─────────┐ ┌─────────┐
+│H264     │ │AAC      │
+│Decoder  │ │Decoder  │
+└────┬────┘ └────┬────┘
+     ↓           ↓
+┌─────────────────┐
+│VideoPlayerView  │ → Renders in separate window
+└─────────────────┘
+
+CUSTOM PROTOCOL
+───────────────
+Each packet from Android:
+[1 byte: Type][4 bytes: Length][N bytes: Data]
+
+Types:
+- 0x00: CONFIG (H.264 SPS/PPS) - MUST be sent first
+- 0x01: VIDEO (H.264 frame in Annex B format)
+- 0x02: AUDIO (AAC frame)
+
+VIDEO PIPELINE
+──────────────
+Android MediaCodec    →  TCP Stream  →  StreamClient
+    (H.264 Annex B)         ↓
+                      H264Decoder
+                    (Converts to AVCC)
+                         ↓
+                   VideoToolbox
+                    (Hardware decode)
+                         ↓
+                   CVImageBuffer
+                         ↓
+             AVSampleBufferDisplayLayer
+                    (Metal render)
+
+AUDIO PIPELINE
+──────────────
+Android MediaCodec  →  TCP Stream  →  StreamClient
+      (AAC)              ↓
+                    AACDecoder
+                   (AudioQueue)
+                       ↓
+                   CoreAudio
+                  (Hardware play)
+
+KEY FEATURES
+────────────
+✓ 100% App Store compliant
+✓ Fully sandboxed
+✓ No external binaries
+✓ Hardware-accelerated decoding & rendering
+✓ Automatic device discovery
+✓ Menu bar utility (no Dock icon)
+✓ Zero-copy video pipeline
+✓ Minimal UI design
+
+REQUIREMENTS
+────────────
+macOS: 13.0+
+Xcode: 15.0+
+Swift: 5.9+
+
+BUILD COMMANDS
+──────────────
+# Open in Xcode
+open ScreenReflect.xcodeproj
+
+# Build from command line
+xcodebuild -project ScreenReflect.xcodeproj \
+           -scheme ScreenReflect \
+           -configuration Release
+
+# Run (in Xcode)
+Press Cmd+R
+
+USAGE FLOW
+──────────
+1. Launch app → Menu bar icon appears
+2. Click icon → Device list popover shows
+3. Android device running server appears in list
+4. Click device → Player window opens
+5. Video/audio streams automatically
+6. Close window → Disconnects
+
+TESTING
+───────
+See DEVELOPMENT.md for:
+- Debug logging
+- Network testing
+- Mock server script
+- Performance monitoring
+- Integration tests
+
+ANDROID SERVER
+──────────────
+See INTEGRATION.md for:
+- mDNS registration
+- TCP server setup
+- Protocol implementation
+- MediaCodec configuration
+- Complete code examples
+
+APP SANDBOX
+───────────
+Entitlements:
+- com.apple.security.app-sandbox: true
+- com.apple.security.network.client: true
+
+Info.plist:
+- LSUIElement: true (menu bar only)
+- NSLocalNetworkUsageDescription: (required)
+- NSBonjourServices: _screenreflect._tcp.
+
+FILE COUNT
+──────────
+Swift files: 7
+Config files: 2 (Info.plist, entitlements)
+Documentation: 3 (README, INTEGRATION, DEVELOPMENT)
+Total lines: ~2500 (excluding project file)
+
+COMPLIANCE CHECKLIST
+────────────────────
+✓ App Sandbox enabled
+✓ Network client entitlement only
+✓ No external binaries
+✓ No Process/shell execution
+✓ Privacy descriptions present
+✓ Public APIs only
+✓ Bonjour services declared
+✓ Menu bar utility (LSUIElement)
+
+NEXT STEPS
+──────────
+1. Open project in Xcode
+2. Configure code signing (select Team)
+3. Build and run (Cmd+R)
+4. Start Android server
+5. Test discovery and streaming
+6. (Optional) Submit to App Store
+
+SUPPORT & DOCUMENTATION
+────────────────────────
+- README.md: Overview and quick start
+- INTEGRATION.md: Android server implementation
+- DEVELOPMENT.md: Development workflow and debugging
+
+For questions, check inline code comments (marked with ///)
+
+═══════════════════════════════════════════════════════════════
+Generated: 2025-11-11
+Version: 1.0
+═══════════════════════════════════════════════════════════════

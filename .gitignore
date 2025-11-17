@@ -1,0 +1,102 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Editor / tooling artifacts
+*.swp
+*.swo
+*.orig
+*.rej
+*.tmp
+*~
+.idea/
+.vscode/
+
+# Logs & reports
+*.log
+*.hprof
+*.logstore
+
+# Archives / packages
+*.zip
+*.tar
+*.gz
+*.tgz
+*.bz2
+
+# Node / npm (in case of scripts)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# ---------------------------
+# Client (macOS SwiftUI app)
+# ---------------------------
+client/DerivedData/
+client/build/
+client/Build/
+client/ScreenReflect.xcodeproj/project.xcworkspace/xcuserdata/
+client/ScreenReflect.xcodeproj/xcuserdata/
+client/ScreenReflect.xcodeproj/xcshareddata/swiftpm/Repositories/
+client/ScreenReflect.xcodeproj/xcshareddata/swiftpm/configuration/
+client/ScreenReflect.xcodeproj/xcshareddata/WorkspaceSettings.xcsettings
+client/ScreenReflect.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+client/ScreenReflect.xcodeproj/*.xcscmblueprint
+client/ScreenReflect.xcodeproj/*.xccheckout
+client/ScreenReflect.xcodeproj/*.moved-aside
+client/ScreenReflect/Preview\ Content/
+client/*.xcuserstate
+client/**/*.xccheckout
+client/**/*.moved-aside
+
+# Swift Package Manager build products
+.build/
+
+# XCBuild intermediates
+client/**/*.xcactivitylog
+client/**/*.xcassets/*.tmp
+client/**/*.dSYM
+
+# ---------------------------
+# Server (Android app)
+# ---------------------------
+server/.gradle/
+server/build/
+server/.idea/
+server/**/*.iml
+server/**/build/
+server/**/captures/
+server/local.properties
+server/captures/
+server/**/*.keystore
+server/**/*.jks
+server/**/*.apk
+server/**/*.aab
+server/**/*.ap_
+server/.cxx/
+server/**/generated/
+server/**/instant-run/
+server/.DS_Store
+server/**/logs/
+
+# Gradle
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+# Kotlin / Java tooling caches
+server/**/kotlin/**
+server/**/.kotlin
+
+# Misc
+*.xcuserdatad
+*.xcworkspace/xcuserdata
+*.xcworkspace/xcshareddata/swiftpm/Repositories
+
