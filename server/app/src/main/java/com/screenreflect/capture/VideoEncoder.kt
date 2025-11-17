@@ -7,12 +7,7 @@ import android.media.projection.MediaProjection
 import android.util.Log
 import android.view.Surface
 import com.screenreflect.network.NetworkServer
-import java.nio.ByteBuffer
 
-/**
- * Video encoder thread that captures screen content and encodes to H.264
- * Uses MediaCodec with Surface input for efficient hardware encoding
- */
 class VideoEncoder(
     private val mediaProjection: MediaProjection,
     private val networkServer: NetworkServer,
@@ -23,32 +18,19 @@ class VideoEncoder(
 
     companion object {
         private const val TAG = "VideoEncoder"
-        private const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC  // H.264
-        private const val FRAME_RATE = 60  // 60fps for buttery smooth motion
-        private const val I_FRAME_INTERVAL = -1  // Use intra-refresh instead of periodic I-frames for lower latency
-        private const val TIMEOUT_USEC = 1000L  // Ultra-low timeout for instant response
+        private const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC
+        private const val FRAME_RATE = 60
+        private const val I_FRAME_INTERVAL = -1
+        private const val TIMEOUT_USEC = 1000L
 
-        /**
-         * Round dimension to nearest multiple of 16 (required for H.264 encoding)
-         */
-        private fun alignDimension(dimension: Int): Int {
-            return (dimension / 16) * 16
-        }
+        private fun alignDimension(dimension: Int): Int = (dimension / 16) * 16
 
-        /**
-         * Calculate appropriate bitrate based on resolution
-         * Formula: pixels_per_frame * frame_rate * bits_per_pixel * motion_factor
-         * Optimized for WiFi streaming with 60fps
-         */
         private fun calculateBitrate(width: Int, height: Int): Int {
             val pixels = width * height
-            val bitsPerPixel = 0.12  // Balanced for smooth WiFi streaming at 60fps
-            val motionFactor = 1.2   // Motion factor for fast movement
-            return (pixels * FRAME_RATE * bitsPerPixel * motionFactor).toInt()
+            return (pixels * FRAME_RATE * 0.12 * 1.2).toInt()
         }
     }
 
-    // Align dimensions to multiples of 16 for H.264 encoding
     private val alignedWidth = alignDimension(width)
     private val alignedHeight = alignDimension(height)
     private val bitRate = calculateBitrate(alignedWidth, alignedHeight)
@@ -56,6 +38,7 @@ class VideoEncoder(
     private var mediaCodec: MediaCodec? = null
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var inputSurface: Surface? = null
+
     @Volatile
     private var running = false
 
@@ -64,16 +47,13 @@ class VideoEncoder(
             setupEncoder()
             encodeLoop()
         } catch (e: Exception) {
-            Log.e(TAG, "Video encoder error", e)
+            Log.e(TAG, "Encoder error", e)
         } finally {
             release()
         }
     }
 
     private fun setupEncoder() {
-        Log.i(TAG, "Setting up video encoder: ${alignedWidth}x${alignedHeight} @ ${FRAME_RATE}fps, ${bitRate / 1_000_000f}Mbps")
-
-        // Create video format with aligned dimensions
         val format = MediaFormat.createVideoFormat(MIME_TYPE, alignedWidth, alignedHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
@@ -87,16 +67,12 @@ class VideoEncoder(
             setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, 10)
         }
 
-        // Create and configure codec
         mediaCodec = MediaCodec.createEncoderByType(MIME_TYPE).apply {
             configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             inputSurface = createInputSurface()
             start()
         }
 
-        Log.i(TAG, "Video encoder configured successfully")
-
-        // Create virtual display - must match encoder dimensions
         virtualDisplay = mediaProjection.createVirtualDisplay(
             "ScreenReflect",
             alignedWidth,
@@ -108,10 +84,7 @@ class VideoEncoder(
             null
         )
 
-        Log.i(TAG, "Virtual display created: ${alignedWidth}x${alignedHeight}")
         running = true
-
-        // Request immediate keyframe for faster startup
         Thread.sleep(100)
         requestKeyFrame()
         Thread.sleep(50)
@@ -126,12 +99,8 @@ class VideoEncoder(
                 val encoderStatus = mediaCodec?.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC) ?: continue
 
                 when {
-                    encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                        // No output available yet
-                    }
-                    encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        // Output format changed - codec initialized
-                    }
+                    encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> continue
+                    encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> continue
                     encoderStatus >= 0 -> {
                         val encodedData = mediaCodec?.getOutputBuffer(encoderStatus)
 
@@ -159,7 +128,7 @@ class VideoEncoder(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error in encode loop", e)
+                Log.e(TAG, "Encode error", e)
                 running = false
             }
         }
@@ -171,38 +140,24 @@ class VideoEncoder(
 
     fun requestKeyFrame() {
         try {
-            mediaCodec?.let { codec ->
+            mediaCodec?.let {
                 val params = android.os.Bundle()
                 params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
-                codec.setParameters(params)
+                it.setParameters(params)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error requesting keyframe", e)
+            Log.e(TAG, "Keyframe error", e)
         }
     }
 
     private fun release() {
-
         try {
             virtualDisplay?.release()
-            virtualDisplay = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error releasing virtual display", e)
-        }
-
-        try {
             inputSurface?.release()
-            inputSurface = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error releasing input surface", e)
-        }
-
-        try {
             mediaCodec?.stop()
             mediaCodec?.release()
-            mediaCodec = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error releasing media codec", e)
+            Log.e(TAG, "Release error", e)
         }
     }
 }
