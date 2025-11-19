@@ -49,7 +49,7 @@ client/ScreenReflect.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSetting
 client/ScreenReflect.xcodeproj/*.xcscmblueprint
 client/ScreenReflect.xcodeproj/*.xccheckout
 client/ScreenReflect.xcodeproj/*.moved-aside
-client/ScreenReflect/Preview\ Content/
+
 client/*.xcuserstate
 client/**/*.xccheckout
 client/**/*.moved-aside
