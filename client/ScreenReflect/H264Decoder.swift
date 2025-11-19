@@ -43,14 +43,9 @@ class H264Decoder: ObservableObject {
     func processConfig(data: Data) {
         print("[H264Decoder] Processing CONFIG packet (\(data.count) bytes)")
 
-        // Print first 16 bytes as hex for debugging
-        let hexString = data.prefix(min(16, data.count)).map { String(format: "%02X", $0) }.joined(separator: " ")
-        print("[H264Decoder] First bytes: \(hexString)")
-
         // Parse NAL units from the config data
         // The data contains H.264 parameter sets in Annex B format
         let nalUnits = parseAnnexBNALUnits(from: data)
-        print("[H264Decoder] Found \(nalUnits.count) NAL units")
 
         for nalUnit in nalUnits {
             guard nalUnit.count > 0 else { continue }
@@ -67,7 +62,7 @@ class H264Decoder: ObservableObject {
                 print("[H264Decoder] Found PPS (\(nalUnit.count) bytes)")
 
             default:
-                print("[H264Decoder] Ignoring NAL unit type \(nalType)")
+                break // Silently ignore other NAL types
             }
         }
 
@@ -159,10 +154,17 @@ class H264Decoder: ObservableObject {
 
         callbackRecord.decompressionOutputRefCon = Unmanaged.passUnretained(self).toOpaque()
 
-        // Session attributes
+        // Session attributes - optimize for performance
         let sessionAttributes: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferMetalCompatibilityKey: true
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary // Enable zero-copy rendering
+        ]
+
+        // Decoder specifications - use hardware acceleration
+        let decoderSpec: [CFString: Any] = [
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true,
+            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true
         ]
 
         // Create decompression session
@@ -170,7 +172,7 @@ class H264Decoder: ObservableObject {
         let result = VTDecompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             formatDescription: formatDescription,
-            decoderSpecification: nil,
+            decoderSpecification: decoderSpec as CFDictionary,
             imageBufferAttributes: sessionAttributes as CFDictionary,
             outputCallback: &callbackRecord,
             decompressionSessionOut: &session
@@ -262,12 +264,12 @@ class H264Decoder: ObservableObject {
             return
         }
 
-        // Decode the frame
+        // Decode the frame with real-time flags for low latency
         var flagsOut: VTDecodeInfoFlags = []
         let decodeStatus = VTDecompressionSessionDecodeFrame(
             decompressionSession,
             sampleBuffer: sampleBuffer,
-            flags: [._EnableAsynchronousDecompression],
+            flags: [._EnableAsynchronousDecompression, ._EnableTemporalProcessing],
             frameRefcon: nil,
             infoFlagsOut: &flagsOut
         )
@@ -347,6 +349,28 @@ class H264Decoder: ObservableObject {
         }
 
         return avccData
+    }
+
+    // MARK: - Reset
+
+    /// Reset the decoder state for reconnection
+    func reset() {
+        print("[H264Decoder] Resetting decoder state")
+
+        // Invalidate existing session
+        if let session = decompressionSession {
+            VTDecompressionSessionInvalidate(session)
+        }
+
+        // Clear all state
+        decompressionSession = nil
+        formatDescription = nil
+        spsData = nil
+        ppsData = nil
+        latestFrame = nil
+        latestFramePTS = .zero
+        isConfigured = false
+        frameCount = 0
     }
 
     // MARK: - Cleanup

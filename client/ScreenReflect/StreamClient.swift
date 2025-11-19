@@ -46,7 +46,23 @@ class StreamClient: ObservableObject {
 
     /// Connect to the Android device
     func connect() {
-        guard connection == nil else { return }
+        // If already connected, do nothing
+        if isConnected && connection != nil {
+            print("[StreamClient] Already connected")
+            return
+        }
+
+        // Clean up any existing connection before reconnecting
+        if connection != nil {
+            print("[StreamClient] Cleaning up existing connection before reconnect")
+            disconnect()
+        }
+
+        print("[StreamClient] Connecting to \(device.hostName):\(device.port)")
+
+        // Reset decoders for clean state
+        h264Decoder.reset()
+        aacDecoder.reset()
 
         // Create endpoint from resolved service
         let host = NWEndpoint.Host(device.hostName)
@@ -75,14 +91,17 @@ class StreamClient: ObservableObject {
 
         // Start connection
         connection?.start(queue: .global(qos: .userInitiated))
-
-        print("[StreamClient] Connecting to \(device.hostName):\(device.port)")
     }
 
     /// Disconnect from the device
     func disconnect() {
+        print("[StreamClient] Disconnecting...")
+
+        // Cancel and clean up connection
         connection?.cancel()
         connection = nil
+
+        // Update state
         isConnected = false
         connectionError = nil
 
@@ -223,9 +242,7 @@ class StreamClient: ObservableObject {
                         return
                     }
 
-                    print("[StreamClient] Successfully received packet: type=\(packetType.rawValue), length=\(length)")
-
-                    // Process the packet
+                    // Process the packet on background queue for better performance
                     Task { @MainActor in
                         self.processPacket(type: packetType, data: payloadData)
                         // Continue receiving next packet
@@ -244,11 +261,11 @@ class StreamClient: ObservableObject {
             h264Decoder.processConfig(data: data)
 
         case .video:
-            print("[StreamClient] Received VIDEO packet (\(data.count) bytes)")
+            // Only log config packets to reduce overhead
             h264Decoder.decode(data: data)
 
         case .audio:
-            print("[StreamClient] Received AUDIO packet (\(data.count) bytes)")
+            // Only log config packets to reduce overhead
             aacDecoder.decode(data: data)
 
         case .audioConfig:

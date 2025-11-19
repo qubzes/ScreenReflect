@@ -42,9 +42,19 @@ struct ScreenReflectApp: App {
 
     /// Opens or focuses a player window for the specified device
     private func openPlayerWindow(for device: DiscoveredDevice) {
+        // Check if window exists
         if let existingWindow = playerWindows[device.id] {
+            // Window exists, bring it to front and try to reconnect
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+
+            // Try to reconnect if not connected
+            if let streamClient = getStreamClient(for: existingWindow) {
+                if !streamClient.isConnected {
+                    print("[ScreenReflectApp] Reconnecting to existing window")
+                    streamClient.connect()
+                }
+            }
             return
         }
 
@@ -59,16 +69,6 @@ struct ScreenReflectApp: App {
             aacDecoder: aacDecoder
         )
 
-        // Create the player view
-        let playerView = VideoPlayerView(
-            h264Decoder: h264Decoder,
-            streamClient: streamClient,
-            device: device
-        )
-
-        // Create hosting controller
-        let hostingController = NSHostingController(rootView: playerView)
-
         // Create window - will resize to actual video dimensions once first frame arrives
         // Start with a reasonable default size
         let window = NSWindow(
@@ -77,6 +77,22 @@ struct ScreenReflectApp: App {
             backing: .buffered,
             defer: false
         )
+
+        // Create the player view with orientation change callback
+        let playerView = VideoPlayerView(
+            h264Decoder: h264Decoder,
+            streamClient: streamClient,
+            device: device,
+            onOrientationChange: { [weak window] newSize in
+                guard let window = window else { return }
+                Task { @MainActor in
+                    self.resizeWindow(window, toVideoSize: newSize)
+                }
+            }
+        )
+
+        // Create hosting controller
+        let hostingController = NSHostingController(rootView: playerView)
 
         window.contentViewController = hostingController
         window.title = "Screen Reflect - \(device.name)"
@@ -147,10 +163,21 @@ struct ScreenReflectApp: App {
             firstFrameObserver,
             .OBJC_ASSOCIATION_RETAIN
         )
+        objc_setAssociatedObject(
+            window,
+            "streamClient",
+            streamClient,
+            .OBJC_ASSOCIATION_RETAIN
+        )
 
         // Show window immediately and activate
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Helper to retrieve the StreamClient from a window
+    private func getStreamClient(for window: NSWindow) -> StreamClient? {
+        return objc_getAssociatedObject(window, "streamClient") as? StreamClient
     }
 
     /// Resizes window to match video dimensions with proper aspect ratio

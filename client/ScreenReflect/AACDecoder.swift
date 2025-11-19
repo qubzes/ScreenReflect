@@ -414,6 +414,23 @@ class AACDecoder: ObservableObject {
         }
     }
 
+    // MARK: - Reset
+
+    /// Reset the decoder state for reconnection
+    func reset() {
+        logger.info("[AACDecoder] Resetting decoder state")
+
+        // Stop playback
+        playerNode?.stop()
+        audioEngine?.stop()
+
+        // Reset state
+        isPlaying = false
+
+        // Recreate audio engine for clean state
+        setupAudioEngine()
+    }
+
     // MARK: - Cleanup
 
     nonisolated deinit {
