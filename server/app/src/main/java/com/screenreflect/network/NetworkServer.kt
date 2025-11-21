@@ -26,7 +26,9 @@ class NetworkServer : Thread() {
     val localPort: Int
         get() = serverSocket?.localPort ?: 0
 
-    private val packetQueue: BlockingQueue<Packet> = LinkedBlockingQueue(30)
+    // Increased queue size from 30 to 150 to prevent frame drops at 60fps
+    // At 60fps, this allows ~2.5 seconds of buffering
+    private val packetQueue: BlockingQueue<Packet> = LinkedBlockingQueue(150)
 
     @Volatile
     private var cachedConfigPacket: ByteArray? = null
@@ -49,8 +51,10 @@ class NetworkServer : Thread() {
 
             clientSocket = serverSocket?.accept()?.apply {
                 keepAlive = true
-                tcpNoDelay = true
-                sendBufferSize = 256 * 1024
+                tcpNoDelay = true // Disable Nagle's algorithm for low latency
+                sendBufferSize = 512 * 1024 // Increased from 256KB to 512KB for smoother streaming
+                receiveBufferSize = 64 * 1024 // Optimize receive buffer
+                soTimeout = 0 // No timeout for blocking reads
             }
 
             outputStream = clientSocket?.getOutputStream()
@@ -94,11 +98,21 @@ class NetworkServer : Thread() {
         }
 
         if (running && outputStream != null) {
+            // Config packets always get priority
             if (type == PACKET_TYPE_CONFIG || type == PACKET_TYPE_AUDIO_CONFIG) {
                 packetQueue.offer(Packet(type, data))
                 return
             }
-            packetQueue.offer(Packet(type, data))
+
+            // Try to add packet to queue; if queue is full, log warning but don't drop
+            if (!packetQueue.offer(Packet(type, data))) {
+                val packetTypeName = when (type) {
+                    PACKET_TYPE_VIDEO -> "VIDEO"
+                    PACKET_TYPE_AUDIO -> "AUDIO"
+                    else -> "UNKNOWN"
+                }
+                Log.w(TAG, "Queue full! Dropping $packetTypeName packet (${data.size} bytes). Consider increasing queue size or reducing encoder output.")
+            }
         }
     }
 

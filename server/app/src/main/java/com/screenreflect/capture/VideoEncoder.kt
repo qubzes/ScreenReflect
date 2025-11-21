@@ -20,14 +20,16 @@ class VideoEncoder(
         private const val TAG = "VideoEncoder"
         private const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC
         private const val FRAME_RATE = 60
-        private const val I_FRAME_INTERVAL = -1
-        private const val TIMEOUT_USEC = 1000L
+        private const val I_FRAME_INTERVAL = 2 // I-frame every 2 seconds for better error recovery
+        private const val TIMEOUT_USEC = 0L // Non-blocking for maximum throughput
 
         private fun alignDimension(dimension: Int): Int = (dimension / 16) * 16
 
         private fun calculateBitrate(width: Int, height: Int): Int {
             val pixels = width * height
-            return (pixels * FRAME_RATE * 0.12 * 1.2).toInt()
+            // Optimized bitrate: 0.07 bits per pixel (balanced quality/bandwidth)
+            // For 1920x1080@60fps: ~8.6 Mbps (vs previous ~15 Mbps)
+            return (pixels * FRAME_RATE * 0.07 * 1.0).toInt()
         }
     }
 
@@ -41,6 +43,10 @@ class VideoEncoder(
 
     @Volatile
     private var running = false
+
+    // Real-time timestamp tracking for A/V sync
+    private var startTimeNanos: Long = 0L
+    private var frameCount: Long = 0L
 
     override fun run() {
         try {
@@ -63,8 +69,14 @@ class VideoEncoder(
             setInteger(MediaFormat.KEY_PRIORITY, 0)
             setInteger(MediaFormat.KEY_LATENCY, 0)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            // Use Main profile for better compression and quality
+            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileMain)
+            setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel42) // Level 4.2 for 1080p60
+            // Intra refresh for error resilience without full I-frames
             setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, 10)
+            // Quality and complexity hints
+            setInteger(MediaFormat.KEY_COMPLEXITY, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            setInteger(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1000000) // 1 second max
         }
 
         mediaCodec = MediaCodec.createEncoderByType(MIME_TYPE).apply {
@@ -85,44 +97,71 @@ class VideoEncoder(
         )
 
         running = true
+        startTimeNanos = System.nanoTime()
+        frameCount = 0L
+
+        // Request initial keyframe after a brief stabilization period
         Thread.sleep(100)
-        requestKeyFrame()
-        Thread.sleep(50)
         requestKeyFrame()
     }
 
     private fun encodeLoop() {
         val bufferInfo = MediaCodec.BufferInfo()
+        var lastFrameLog = System.currentTimeMillis()
 
         while (running) {
             try {
                 val encoderStatus = mediaCodec?.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC) ?: continue
 
                 when {
-                    encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> continue
-                    encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> continue
+                    encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // Non-blocking mode: yield to prevent tight loop
+                        Thread.yield()
+                        continue
+                    }
+                    encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        Log.d(TAG, "Encoder output format changed")
+                        continue
+                    }
                     encoderStatus >= 0 -> {
                         val encodedData = mediaCodec?.getOutputBuffer(encoderStatus)
 
                         if (encodedData != null && bufferInfo.size > 0) {
                             if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                // SPS/PPS config data
                                 val configData = ByteArray(bufferInfo.size)
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 encodedData.get(configData)
                                 networkServer.sendPacket(NetworkServer.PACKET_TYPE_CONFIG, configData)
+                                Log.d(TAG, "Sent config packet: ${bufferInfo.size} bytes")
                             } else {
+                                // Regular video frame
                                 val frameData = ByteArray(bufferInfo.size)
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 encodedData.get(frameData)
+
+                                val isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                                 networkServer.sendPacket(NetworkServer.PACKET_TYPE_VIDEO, frameData)
+
+                                frameCount++
+
+                                // Periodic stats logging (every 5 seconds)
+                                val now = System.currentTimeMillis()
+                                if (now - lastFrameLog >= 5000) {
+                                    val elapsedSecs = (System.nanoTime() - startTimeNanos) / 1_000_000_000.0
+                                    val actualFps = frameCount / elapsedSecs
+                                    Log.d(TAG, "Stats: ${String.format("%.1f", actualFps)} FPS, Frame#$frameCount, Size: ${frameData.size} bytes, KeyFrame: $isKeyFrame")
+                                    lastFrameLog = now
+                                }
                             }
                         }
 
                         mediaCodec?.releaseOutputBuffer(encoderStatus, false)
 
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            Log.d(TAG, "End of stream")
                             running = false
                         }
                     }

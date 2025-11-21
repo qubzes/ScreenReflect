@@ -21,8 +21,8 @@ class AudioEncoder(
         private const val MIME_TYPE = MediaFormat.MIMETYPE_AUDIO_AAC
         private const val SAMPLE_RATE = 48000
         private const val CHANNEL_COUNT = 2
-        private const val BIT_RATE = 128_000
-        private const val TIMEOUT_USEC = 10000L
+        private const val BIT_RATE = 192_000 // Increased from 128kbps for better quality
+        private const val TIMEOUT_USEC = 5000L // Reduced timeout for lower latency
     }
 
     private var audioRecord: AudioRecord? = null
@@ -30,6 +30,10 @@ class AudioEncoder(
 
     @Volatile
     private var running = false
+
+    // Real-time timestamp tracking for A/V sync
+    private var startTimeNanos: Long = 0L
+    private var packetCount: Long = 0L
 
     override fun run() {
         try {
@@ -84,7 +88,10 @@ class AudioEncoder(
     private fun encodeLoop() {
         audioRecord?.startRecording()
         running = true
+        startTimeNanos = System.nanoTime()
+        packetCount = 0L
         val bufferInfo = MediaCodec.BufferInfo()
+        var lastPacketLog = System.currentTimeMillis()
 
         while (running) {
             try {
@@ -100,9 +107,11 @@ class AudioEncoder(
                             val csd = ByteArray(csdBuffer.remaining())
                             csdBuffer.get(csd)
                             networkServer.sendPacket(NetworkServer.PACKET_TYPE_AUDIO_CONFIG, csd)
+                            Log.d(TAG, "Sent audio config (CSD-0): ${csd.size} bytes")
                         } else {
                             val manualCSD = byteArrayOf(0x11.toByte(), 0x90.toByte())
                             networkServer.sendPacket(NetworkServer.PACKET_TYPE_AUDIO_CONFIG, manualCSD)
+                            Log.d(TAG, "Sent fallback audio config")
                         }
                     }
                     encoderStatus >= 0 -> {
@@ -114,17 +123,29 @@ class AudioEncoder(
                             encodedData.limit(bufferInfo.offset + bufferInfo.size)
                             encodedData.get(audioData)
                             networkServer.sendPacket(NetworkServer.PACKET_TYPE_AUDIO, audioData)
+
+                            packetCount++
+
+                            // Periodic stats logging (every 5 seconds)
+                            val now = System.currentTimeMillis()
+                            if (now - lastPacketLog >= 5000) {
+                                val elapsedSecs = (System.nanoTime() - startTimeNanos) / 1_000_000_000.0
+                                val packetsPerSec = packetCount / elapsedSecs
+                                Log.d(TAG, "Audio Stats: ${String.format("%.1f", packetsPerSec)} packets/s, Packet#$packetCount, Size: ${audioData.size} bytes")
+                                lastPacketLog = now
+                            }
                         }
 
                         mediaCodec?.releaseOutputBuffer(encoderStatus, false)
 
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            Log.d(TAG, "End of audio stream")
                             running = false
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Encode error", e)
+                Log.e(TAG, "Audio encode error", e)
                 running = false
             }
         }

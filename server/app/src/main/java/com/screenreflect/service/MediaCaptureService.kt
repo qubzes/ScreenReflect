@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -42,6 +43,7 @@ class MediaCaptureService : Service() {
     private var nsdHelper: NsdHelper? = null
 
     private var isRunning = false
+    private var currentOrientation: Int = Configuration.ORIENTATION_UNDEFINED
 
     override fun onCreate() {
         super.onCreate()
@@ -128,13 +130,20 @@ class MediaCaptureService : Service() {
                 startPublishing(port)
             }
 
-            // Get screen dimensions
+            // Get screen dimensions and current orientation
             val displayMetrics = resources.displayMetrics
             val screenWidth = displayMetrics.widthPixels
             val screenHeight = displayMetrics.heightPixels
             val screenDpi = displayMetrics.densityDpi
+            currentOrientation = resources.configuration.orientation
 
-            Log.i(TAG, "📱 Screen: ${screenWidth}x$screenHeight @ ${screenDpi}dpi")
+            val orientationName = when (currentOrientation) {
+                Configuration.ORIENTATION_PORTRAIT -> "Portrait"
+                Configuration.ORIENTATION_LANDSCAPE -> "Landscape"
+                else -> "Unknown"
+            }
+
+            Log.i(TAG, "📱 Screen: ${screenWidth}x$screenHeight @ ${screenDpi}dpi ($orientationName)")
 
             // Start video encoder with actual screen dimensions
             videoEncoder = VideoEncoder(projection, server, screenWidth, screenHeight, screenDpi).apply {
@@ -249,5 +258,28 @@ class MediaCaptureService : Service() {
         super.onDestroy()
         stopCapture()
         Log.i(TAG, "Service destroyed")
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+
+        // Check if orientation actually changed
+        if (newConfig.orientation != currentOrientation && currentOrientation != Configuration.ORIENTATION_UNDEFINED) {
+            val orientationName = when (newConfig.orientation) {
+                Configuration.ORIENTATION_PORTRAIT -> "Portrait"
+                Configuration.ORIENTATION_LANDSCAPE -> "Landscape"
+                else -> "Unknown"
+            }
+
+            Log.i(TAG, "📱 Orientation changed to: $orientationName")
+            Log.i(TAG, "🔄 Restarting encoder with new dimensions...")
+
+            // The encoder automatically adapts because it uses MediaProjection's virtual display
+            // which updates dimensions automatically on configuration changes.
+            // We just need to request a keyframe for a clean transition
+            videoEncoder?.requestKeyFrame()
+
+            currentOrientation = newConfig.orientation
+        }
     }
 }

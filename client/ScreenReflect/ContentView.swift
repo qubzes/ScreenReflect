@@ -7,6 +7,34 @@
 
 import SwiftUI
 
+// MARK: - Color Extension for Hex Support
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue:  Double(b) / 255,
+            opacity: Double(a) / 255
+        )
+    }
+}
+
 struct ContentView: View {
 
     @ObservedObject var browser: BonjourBrowser
@@ -19,30 +47,45 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
+            // Ultra-sleek Header with shadcn-inspired styling
+            HStack(spacing: 12) {
                 Image(systemName: "display")
-                    .font(.title2)
-                    .foregroundColor(.blue)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.linearGradient(
+                        colors: [Color(hex: "a855f7"), Color(hex: "6366f1")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
 
                 Text(showManualConnect ? "Manual Connect" : "Screen Reflect")
-                    .font(.headline)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Color(hex: "f8fafc"))
 
                 Spacer()
 
                 if showManualConnect {
                     Button(action: {
-                        showManualConnect = false
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            showManualConnect = false
+                        }
                     }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(Color(hex: "94a3b8"))
+                            .frame(width: 24, height: 24)
+                            .background(Color(hex: "1e293b"))
+                            .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color(hex: "0f172a"))
 
-            Divider()
+            Rectangle()
+                .fill(Color(hex: "1e293b"))
+                .frame(height: 1)
 
             // Show Manual Connect UI or Device List
             if showManualConnect {
@@ -66,34 +109,43 @@ struct ContentView: View {
                     }
                 )
             } else if browser.resolvedServices.isEmpty {
-                VStack(spacing: 16) {
+                VStack(spacing: 20) {
                     if browser.isBrowsing {
                         ProgressView()
-                            .scaleEffect(1.2)
+                            .controlSize(.large)
+                            .tint(Color(hex: "8b5cf6"))
 
                         Text("Searching for devices...")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Color(hex: "cbd5e1"))
 
                         Text("Make sure your Android device is running Screen Reflect")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(hex: "64748b"))
                             .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                            .padding(.horizontal, 20)
                     } else {
-                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                            .font(.largeTitle)
-                            .foregroundColor(.secondary)
+                        ZStack {
+                            Circle()
+                                .fill(Color(hex: "1e293b"))
+                                .frame(width: 80, height: 80)
+
+                            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                                .font(.system(size: 32, weight: .light))
+                                .foregroundColor(Color(hex: "64748b"))
+                        }
 
                         Text("No devices found")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Color(hex: "94a3b8"))
                     }
                 }
                 .frame(maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .background(Color(hex: "0a0f1e"))
             } else {
-                ScrollView {
-                    VStack(spacing: 8) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 6) {
                         ForEach(browser.resolvedServices) { device in
                             DeviceRow(
                                 device: device,
@@ -103,48 +155,59 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
                 }
+                .background(Color(hex: "0a0f1e"))
             }
 
-            Divider()
+            Rectangle()
+                .fill(Color(hex: "1e293b"))
+                .frame(height: 1)
 
-            // Footer
-            HStack {
+            // Ultra-sleek Footer
+            HStack(spacing: 12) {
                 if browser.isBrowsing {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         Circle()
-                            .fill(Color.green)
-                            .frame(width: 8, height: 8)
+                            .fill(Color(hex: "10b981"))
+                            .frame(width: 6, height: 6)
+                            .shadow(color: Color(hex: "10b981").opacity(0.5), radius: 4, x: 0, y: 0)
 
                         Text("Searching...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: "64748b"))
                     }
                 }
 
                 Spacer()
 
                 Button(action: {
-                    showManualConnect = true
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showManualConnect = true
+                    }
                 }) {
                     Text("Manual Connect")
-                        .font(.caption)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "8b5cf6"))
                 }
                 .buttonStyle(.plain)
-                .foregroundColor(.blue)
 
                 Button(action: {
                     NSApplication.shared.terminate(nil)
                 }) {
                     Text("Quit")
-                        .font(.caption)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "64748b"))
                 }
                 .buttonStyle(.plain)
-                .foregroundColor(.secondary)
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(hex: "0f172a"))
         }
+        .frame(width: 340, height: 420)
+        .background(Color(hex: "0a0f1e"))
         .onAppear {
             browser.startBrowsing()
         }
@@ -238,60 +301,87 @@ struct ManualConnectContentView: View {
     }
 }
 
-// MARK: - Device Row
+// MARK: - Ultra-sleek Device Row
 
 struct DeviceRow: View {
 
     let device: DiscoveredDevice
     let isConnecting: Bool
     let action: () -> Void
+    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: "iphone")
-                    .font(.title2)
-                    .foregroundColor(.blue)
-                    .frame(width: 30)
+            HStack(spacing: 14) {
+                // Device Icon with gradient background
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(LinearGradient(
+                            colors: [Color(hex: "6366f1"), Color(hex: "8b5cf6")],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
+                        .frame(width: 44, height: 44)
+
+                    Image(systemName: "iphone.gen3")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(.white)
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(device.name)
-                        .font(.body)
-                        .foregroundColor(.primary)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Color(hex: "f1f5f9"))
+                        .lineLimit(1)
 
                     Text("\(device.hostName):\(device.port)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(Color(hex: "64748b"))
+                        .lineLimit(1)
                 }
 
                 Spacer()
 
                 if isConnecting {
                     ProgressView()
-                        .scaleEffect(0.7)
-                        .frame(width: 16, height: 16)
-                    Text("Connecting...")
-                        .font(.caption2)
-                        .foregroundColor(.blue)
+                        .controlSize(.small)
+                        .tint(Color(hex: "8b5cf6"))
+                        .frame(width: 20, height: 20)
                 } else {
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(hex: isHovering ? "8b5cf6" : "475569"))
                 }
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(hex: "1e293b"))
+                    .opacity(isHovering ? 0.8 : 0.5)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(
+                        LinearGradient(
+                            colors: isHovering ?
+                                [Color(hex: "6366f1").opacity(0.5), Color(hex: "8b5cf6").opacity(0.5)] :
+                                [Color(hex: "334155").opacity(0.3), Color(hex: "334155").opacity(0.3)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: isHovering ? Color(hex: "8b5cf6").opacity(0.2) : .clear, radius: 8, x: 0, y: 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isConnecting)  // Disable button while connecting
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.0))
-        )
-        .opacity(isConnecting ? 0.7 : 1.0)  // Dim while connecting
+        .disabled(isConnecting)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isConnecting)
         .onHover { hovering in
-            // Visual feedback on hover can be added here if desired
+            isHovering = hovering && !isConnecting
         }
     }
 }
