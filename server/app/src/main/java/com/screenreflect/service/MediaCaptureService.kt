@@ -157,6 +157,13 @@ class MediaCaptureService : Service() {
             videoEncoder = VideoEncoder(projection, server, screenWidth, screenHeight, screenDpi).apply {
                 start()
             }
+            
+            // Send ACTUAL encoded dimensions to client (may be aligned to 16px boundaries)
+            val encoder = videoEncoder
+            if (encoder != null) {
+                server.sendDimensionUpdate(encoder.encodedWidth, encoder.encodedHeight)
+                Log.i(TAG, "📐 Encoded dimensions: ${encoder.encodedWidth}x${encoder.encodedHeight}")
+            }
 
             // Start audio encoder
             audioEncoder = AudioEncoder(projection, server).apply {
@@ -164,7 +171,6 @@ class MediaCaptureService : Service() {
             }
 
             // Set callback to request keyframe when client connects
-            val encoder = videoEncoder
             server.onClientConnected = {
                 encoder?.requestKeyFrame()
             }
@@ -282,14 +288,31 @@ class MediaCaptureService : Service() {
             }
 
             Log.i(TAG, "📱 Orientation changed to: $orientationName")
-            Log.i(TAG, "🔄 Restarting encoder with new dimensions...")
-
-            // The encoder automatically adapts because it uses MediaProjection's virtual display
-            // which updates dimensions automatically on configuration changes.
-            // We just need to request a keyframe for a clean transition
-            videoEncoder?.requestKeyFrame()
-
+            
+            // Get new screen dimensions
+            val displayMetrics = resources.displayMetrics
+            val newWidth = displayMetrics.widthPixels
+            val newHeight = displayMetrics.heightPixels
+            val screenDpi = displayMetrics.densityDpi
+            
+            Log.i(TAG, "🔄 New dimensions: ${newWidth}x${newHeight} @ ${screenDpi}dpi")
+            
+            // Just notify about dimension change - VirtualDisplay auto-adapts
+            videoEncoder?.notifyDimensionChange(newWidth, newHeight)
+            
+            // Send ACTUAL encoded dimensions to client (may be aligned to 16px boundaries)
+            val encoder = videoEncoder
+            if (encoder != null) {
+                networkServer?.sendDimensionUpdate(encoder.encodedWidth, encoder.encodedHeight)
+                Log.i(TAG, "📐 Encoded dimensions: ${encoder.encodedWidth}x${encoder.encodedHeight}")
+            }
+            
+            Log.i(TAG, "✅ Dimension change handled")
+            
             currentOrientation = newConfig.orientation
+            
+            // Update notification
+            updateNotification("Streaming ${newWidth}x${newHeight} ($orientationName)")
         }
     }
 }

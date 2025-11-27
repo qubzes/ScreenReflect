@@ -23,7 +23,12 @@ class VideoEncoder(
         private const val I_FRAME_INTERVAL = 2 // I-frame every 2 seconds for better error recovery
         private const val TIMEOUT_USEC = 0L // Non-blocking for maximum throughput
 
-        private fun alignDimension(dimension: Int): Int = (dimension / 16) * 16
+        // Round UP to nearest multiple of 16 to avoid black bars
+        // Example: 1079 -> 1088 (not 1072)
+        private fun alignDimension(dimension: Int): Int {
+            val remainder = dimension % 16
+            return if (remainder == 0) dimension else dimension + (16 - remainder)
+        }
 
         private fun calculateBitrate(width: Int, height: Int): Int {
             val pixels = width * height
@@ -33,9 +38,13 @@ class VideoEncoder(
         }
     }
 
-    private val alignedWidth = alignDimension(width)
-    private val alignedHeight = alignDimension(height)
+    private var alignedWidth = alignDimension(width)
+    private var alignedHeight = alignDimension(height)
     private val bitRate = calculateBitrate(alignedWidth, alignedHeight)
+
+    // Public accessors for actual encoded dimensions
+    val encodedWidth: Int get() = alignedWidth
+    val encodedHeight: Int get() = alignedHeight
 
     private var mediaCodec: MediaCodec? = null
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -174,7 +183,28 @@ class VideoEncoder(
     }
 
     fun stopEncoding() {
+        Log.d(TAG, "stopEncoding() called")
         running = false
+        // Interrupt thread to break out of encode loop if in yield/sleep
+        interrupt()
+    }
+
+    /**
+     * Notify about dimension change without recreating encoder
+     * The VirtualDisplay will automatically adapt to orientation changes
+     */
+    fun notifyDimensionChange(newWidth: Int, newHeight: Int) {
+        val alignedW = alignDimension(newWidth)
+        val alignedH = alignDimension(newHeight)
+        
+        // Update internal dimensions for reporting
+        alignedWidth = alignedW
+        alignedHeight = alignedH
+        
+        // Request keyframe for clean transition
+        requestKeyFrame()
+        
+        Log.i(TAG, "✅ Dimension change notified: ${alignedW}x${alignedH}")
     }
 
     fun requestKeyFrame() {

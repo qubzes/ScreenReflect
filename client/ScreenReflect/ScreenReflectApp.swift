@@ -78,12 +78,12 @@ struct ScreenReflectApp: App {
             defer: false
         )
 
-        // Create the player view with orientation change callback
+        // Create the player view with dimension change callback
         let playerView = VideoPlayerView(
             h264Decoder: h264Decoder,
             streamClient: streamClient,
             device: device,
-            onOrientationChange: { [weak window] newSize in
+            onDimensionChange: { [weak window] newSize in
                 guard let window = window else { return }
                 Task { @MainActor in
                     self.resizeWindow(window, toVideoSize: newSize)
@@ -117,7 +117,6 @@ struct ScreenReflectApp: App {
             }
 
         // Observe first frame to resize window to actual video dimensions
-        // Handles both portrait and landscape orientations automatically
         var firstFrameObserver: AnyCancellable?
         firstFrameObserver = h264Decoder.$latestFrame
             .compactMap { $0 }
@@ -131,6 +130,17 @@ struct ScreenReflectApp: App {
                 }
 
                 firstFrameObserver?.cancel()
+            }
+        
+        // Observe dimension changes from server (orientation changes)
+        var dimensionObserver: AnyCancellable?
+        dimensionObserver = streamClient.$videoDimensions
+            .compactMap { $0 }
+            .sink { [self] newDimensions in
+                DispatchQueue.main.async {
+                    print("[ScreenReflectApp] Dimension update: \(Int(newDimensions.width))x\(Int(newDimensions.height))")
+                    self.resizeWindow(window, toVideoSize: newDimensions)
+                }
             }
 
         // Handle window close
@@ -165,6 +175,12 @@ struct ScreenReflectApp: App {
         )
         objc_setAssociatedObject(
             window,
+            "dimensionObserver",
+            dimensionObserver,
+            .OBJC_ASSOCIATION_RETAIN
+        )
+        objc_setAssociatedObject(
+            window,
             "streamClient",
             streamClient,
             .OBJC_ASSOCIATION_RETAIN
@@ -180,9 +196,11 @@ struct ScreenReflectApp: App {
         return objc_getAssociatedObject(window, "streamClient") as? StreamClient
     }
 
-    /// Resizes window to match video dimensions with proper aspect ratio
-    /// Handles both portrait and landscape orientations
+    /// Resizes window to match exact video dimensions from server
+    /// Automatically handles portrait and landscape orientations
     private func resizeWindow(_ window: NSWindow, toVideoSize videoSize: NSSize) {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        
         let currentFrame = window.frame
         let currentContentSize = window.contentView?.frame.size ?? .zero
 
@@ -190,22 +208,45 @@ struct ScreenReflectApp: App {
         let chromeWidth = currentFrame.width - currentContentSize.width
         let chromeHeight = currentFrame.height - currentContentSize.height
 
+        // Get usable screen area (excluding menu bar and dock)
+        let visibleFrame = screen.visibleFrame
+        let maxWidth = visibleFrame.width - 40  // 20px margin on each side
+        let maxHeight = visibleFrame.height - 40 // 20px margin top/bottom
+        
+        // Calculate target size, scaling down if needed
+        var targetWidth = videoSize.width
+        var targetHeight = videoSize.height
+        
+        // Scale down if video is larger than screen
+        if targetWidth > maxWidth || targetHeight > maxHeight {
+            let widthScale = maxWidth / targetWidth
+            let heightScale = maxHeight / targetHeight
+            let scale = min(widthScale, heightScale)
+            
+            targetWidth *= scale
+            targetHeight *= scale
+            
+            print("[ScreenReflectApp] Scaling down video: \(videoSize.width)x\(videoSize.height) -> \(Int(targetWidth))x\(Int(targetHeight))")
+        }
+        
         // Calculate new frame size including chrome
-        let newFrameWidth = videoSize.width + chromeWidth
-        let newFrameHeight = videoSize.height + chromeHeight
+        let newFrameWidth = targetWidth + chromeWidth
+        let newFrameHeight = targetHeight + chromeHeight
 
         var newFrame = currentFrame
         newFrame.size = NSSize(width: newFrameWidth, height: newFrameHeight)
 
-        // Lock aspect ratio to video dimensions
+        // Lock aspect ratio to EXACT video dimensions (not scaled)
         let aspectRatio = videoSize.width / videoSize.height
-        window.contentAspectRatio = NSSize(width: aspectRatio * 100, height: 100)
+        window.contentAspectRatio = NSSize(width: aspectRatio * 1000, height: 1000)
 
         // Animate resize and bring to front
         window.setFrame(newFrame, display: true, animate: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        
+        print("[ScreenReflectApp] Window resized to: \(Int(newFrame.width))x\(Int(newFrame.height)) (content: \(Int(targetWidth))x\(Int(targetHeight)))")
     }
 }
 

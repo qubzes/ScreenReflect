@@ -16,6 +16,7 @@ class NetworkServer : Thread() {
         const val PACKET_TYPE_VIDEO: Byte = 0x01
         const val PACKET_TYPE_AUDIO: Byte = 0x02
         const val PACKET_TYPE_AUDIO_CONFIG: Byte = 0x03
+        const val PACKET_TYPE_DIMENSION: Byte = 0x04
     }
 
     private var serverSocket: ServerSocket? = null
@@ -149,6 +150,23 @@ class NetworkServer : Thread() {
                 // }
                 // Log.w(TAG, "Queue full! Dropping $packetTypeName packet")
             }
+        }
+    }
+
+    /**
+     * Send dimension update to client
+     * Format: 4 bytes width (big-endian) + 4 bytes height (big-endian)
+     */
+    fun sendDimensionUpdate(width: Int, height: Int) {
+        Log.i(TAG, "Sending dimension update: ${width}x${height}")
+        val buffer = ByteBuffer.allocate(8)
+        buffer.putInt(width)
+        buffer.putInt(height)
+        val data = buffer.array()
+        
+        // Dimension updates are high priority, send immediately
+        if (running && outputStream != null) {
+            packetQueue.offer(Packet(PACKET_TYPE_DIMENSION, data))
         }
     }
 

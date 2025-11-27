@@ -14,6 +14,7 @@ enum PacketType: UInt8 {
     case video = 0x01        // H.264 video frame
     case audio = 0x02        // AAC audio frame
     case audioConfig = 0x03  // AAC AudioSpecificConfig (CSD-0)
+    case dimension = 0x04    // Video dimension update (8 bytes: width + height)
 }
 
 /// Network client that manages TCP connection and stream parsing
@@ -24,6 +25,7 @@ class StreamClient: ObservableObject {
 
     @Published var isConnected: Bool = false
     @Published var connectionError: String?
+    @Published var videoDimensions: CGSize?
 
     // MARK: - Private Properties
 
@@ -271,6 +273,30 @@ class StreamClient: ObservableObject {
         case .audioConfig:
             print("[StreamClient] Received AUDIO_CONFIG packet (\(data.count) bytes)")
             aacDecoder.setAudioSpecificConfig(data: data)
+            
+        case .dimension:
+            // Parse dimension packet: 4 bytes width + 4 bytes height (big-endian)
+            guard data.count == 8 else {
+                print("[StreamClient] Invalid DIMENSION packet size: \(data.count) bytes (expected 8)")
+                return
+            }
+            
+            let width = data.withUnsafeBytes { ptr in
+                ptr.load(fromByteOffset: 0, as: UInt32.self).bigEndian
+            }
+            
+            let height = data.withUnsafeBytes { ptr in
+                ptr.load(fromByteOffset: 4, as: UInt32.self).bigEndian
+            }
+            
+            let newDimensions = CGSize(width: CGFloat(width), height: CGFloat(height))
+            print("[StreamClient] Received DIMENSION update: \(Int(width))x\(Int(height))")
+            
+            // Update published property to notify UI
+            videoDimensions = newDimensions
+            
+            // Prepare decoder for new dimensions (it will handle this when new CONFIG arrives)
+            h264Decoder.prepareForDimensionChange(newDimensions: newDimensions)
         }
     }
 }

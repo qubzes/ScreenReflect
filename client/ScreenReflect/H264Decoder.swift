@@ -36,6 +36,9 @@ class H264Decoder: ObservableObject {
 
     // Frame counter for debugging
     private var frameCount: Int = 0
+    
+    // Cached format description for performance
+    private var cachedFormatDescription: CMVideoFormatDescription?
 
     // MARK: - Configuration
 
@@ -68,6 +71,17 @@ class H264Decoder: ObservableObject {
 
         // Create decompression session if we have both SPS and PPS
         if spsData != nil && ppsData != nil {
+            // If we already have a session, invalidate it first (dimension change scenario)
+            if decompressionSession != nil {
+                print("[H264Decoder] Invalidating existing session for new configuration")
+                if let session = decompressionSession {
+                    VTDecompressionSessionInvalidate(session)
+                }
+                decompressionSession = nil
+                formatDescription = nil
+                cachedFormatDescription = nil
+            }
+            
             createDecompressionSession()
         }
     }
@@ -351,6 +365,20 @@ class H264Decoder: ObservableObject {
         return avccData
     }
 
+    // MARK: - Dimension Changes
+    
+    /// Prepare decoder for upcoming dimension change
+    /// This clears cached state so new CONFIG will create fresh session
+    func prepareForDimensionChange(newDimensions: CGSize) {
+        print("[H264Decoder] Preparing for dimension change to \(Int(newDimensions.width))x\(Int(newDimensions.height))")
+        
+        // Clear cached format description so it gets recreated with new dimensions
+        cachedFormatDescription = nil
+        
+        // Note: We don't invalidate the session here - we'll do that when new CONFIG arrives
+        // This allows any in-flight frames to complete rendering
+    }
+
     // MARK: - Reset
 
     /// Reset the decoder state for reconnection
@@ -365,6 +393,7 @@ class H264Decoder: ObservableObject {
         // Clear all state
         decompressionSession = nil
         formatDescription = nil
+        cachedFormatDescription = nil
         spsData = nil
         ppsData = nil
         latestFrame = nil
