@@ -34,6 +34,12 @@ class MediaCaptureService : Service() {
 
         const val ACTION_START = "com.screenreflect.START"
         const val ACTION_STOP = "com.screenreflect.STOP"
+        
+        // Static state for UI persistence
+        var isServiceRunning = false
+            private set
+        var currentServerPort = 0
+            private set
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -48,6 +54,7 @@ class MediaCaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Service created")
+        isServiceRunning = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -113,6 +120,7 @@ class MediaCaptureService : Service() {
 
             val server = networkServer ?: return
             val port = server.localPort
+            currentServerPort = port
 
             Log.i(TAG, "Network server started on port $port")
 
@@ -192,6 +200,7 @@ class MediaCaptureService : Service() {
         // Close network server
         networkServer?.close()
         networkServer = null
+        currentServerPort = 0
 
         // Stop media projection
         mediaProjection?.stop()
@@ -257,6 +266,7 @@ class MediaCaptureService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopCapture()
+        isServiceRunning = false
         Log.i(TAG, "Service destroyed")
     }
 

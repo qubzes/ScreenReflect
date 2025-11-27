@@ -113,27 +113,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.checkServiceState()
+    }
+
     private fun handleStartClick() {
-        // Show instruction dialog first
-        AlertDialog.Builder(this)
-            .setTitle("Screen Capture Permission")
-            .setMessage("After tapping OK, you will see a system dialog.\n\n" +
-                    "⚠️ IMPORTANT: You MUST tap \"Start now\" (not Cancel) to allow screen capture.\n\n" +
-                    "If you tap Cancel, streaming will fail.")
-            .setPositiveButton("OK") { _, _ ->
-                // Check audio permission first
-                if (ContextCompat.checkSelfPermission(
-                        this,
-                        Manifest.permission.RECORD_AUDIO
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                } else {
-                    requestScreenCapture()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        // Check audio permission first
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            requestScreenCapture()
+        }
     }
 
     private fun requestScreenCapture() {
@@ -182,10 +177,15 @@ fun ScreenReflectApp(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Screen Reflect") },
+                title = { 
+                    Text(
+                        "Screen Reflect",
+                        style = MaterialTheme.typography.titleLarge
+                    ) 
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
         }
@@ -206,24 +206,29 @@ fun ScreenReflectApp(
                     Icons.Default.PlayArrow
                 },
                 contentDescription = null,
-                modifier = Modifier.size(80.dp),
-                tint = if (uiState.isStreaming) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.primary
-                }
+                modifier = Modifier.size(120.dp),
+                tint = MaterialTheme.colorScheme.onSurface
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             // Status text
             Text(
-                text = uiState.statusText,
-                style = MaterialTheme.typography.titleMedium,
+                text = if (uiState.isStreaming) "Streaming Active" else "Ready to Stream",
+                style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
+            
+            if (uiState.isStreaming && uiState.serverPort > 0) {
+                 Spacer(modifier = Modifier.height(8.dp))
+                 Text(
+                    text = "Port: ${uiState.serverPort}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(48.dp))
 
             // Start/Stop button
             Button(
@@ -236,81 +241,25 @@ fun ScreenReflectApp(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp),
+                    .height(64.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (uiState.isStreaming) {
-                        MaterialTheme.colorScheme.error
+                        MaterialTheme.colorScheme.onSurface
                     } else {
                         MaterialTheme.colorScheme.primary
+                    },
+                    contentColor = if (uiState.isStreaming) {
+                        MaterialTheme.colorScheme.surface
+                    } else {
+                        MaterialTheme.colorScheme.onPrimary
                     }
-                )
+                ),
+                shape = MaterialTheme.shapes.extraSmall // Sharper corners for modern look
             ) {
                 Text(
                     text = if (uiState.isStreaming) "Stop Streaming" else "Start Streaming",
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleLarge
                 )
-            }
-
-            if (!uiState.isStreaming) {
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = "Ensure your macOS device is on the same network",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = "Connection Info",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "Server Port: ${uiState.serverPort}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "For emulator: Run this command on your Mac:",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Text(
-                            text = "adb forward tcp:${uiState.serverPort} tcp:${uiState.serverPort}",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "Then use Manual Connect with:\nHost: 127.0.0.1\nPort: ${uiState.serverPort}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
             }
         }
     }

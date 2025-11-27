@@ -143,7 +143,7 @@ class VideoEncoder(
                                 encodedData.get(frameData)
 
                                 val isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                                networkServer.sendPacket(NetworkServer.PACKET_TYPE_VIDEO, frameData)
+                                networkServer.sendPacket(NetworkServer.PACKET_TYPE_VIDEO, frameData, isKeyFrame)
 
                                 frameCount++
 

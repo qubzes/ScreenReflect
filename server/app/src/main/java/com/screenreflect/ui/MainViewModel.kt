@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.screenreflect.service.MediaCaptureService
 
 /**
  * ViewModel for main screen
@@ -27,9 +28,25 @@ class MainViewModel : ViewModel() {
 
     fun updateConnectionInfo(port: Int) {
         _uiState.value = _uiState.value.copy(
+            isStreaming = true,
             serverPort = port,
-            statusText = "Streaming on port $port"
+            statusText = "Streaming active"
         )
+    }
+
+    fun checkServiceState() {
+        if (MediaCaptureService.isServiceRunning) {
+            _uiState.value = _uiState.value.copy(
+                isStreaming = true,
+                serverPort = MediaCaptureService.currentServerPort,
+                statusText = "Streaming active"
+            )
+        } else {
+            _uiState.value = _uiState.value.copy(
+                isStreaming = false,
+                statusText = "Ready to stream"
+            )
+        }
     }
 
     data class UiState(

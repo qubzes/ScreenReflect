@@ -18,7 +18,7 @@ struct ScreenReflectApp: App {
 
     @StateObject private var browser = BonjourBrowser()
     @State private var playerWindows: [UUID: NSWindow] = [:]
-    @State private var connectingDevices: Set<UUID> = []
+    @StateObject private var appState = AppState()
 
     // MARK: - Scene
 
@@ -26,9 +26,9 @@ struct ScreenReflectApp: App {
         MenuBarExtra("Screen Reflect", systemImage: "display") {
             ContentView(
                 browser: browser,
-                connectingDevices: connectingDevices,
+                appState: appState,
                 onDeviceSelected: { device in
-                    connectingDevices.insert(device.id)
+                    appState.setConnecting(device.id, isConnecting: true)
                     openPlayerWindow(for: device)
                 }
             )
@@ -109,7 +109,7 @@ struct ScreenReflectApp: App {
             .first()
             .sink { [self] _ in
                 DispatchQueue.main.async {
-                    self.connectingDevices.remove(device.id)
+                    self.appState.setConnecting(device.id, isConnecting: false)
                     window.makeKeyAndOrderFront(nil)
                     NSApp.activate(ignoringOtherApps: true)
                 }

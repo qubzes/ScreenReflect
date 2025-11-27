@@ -38,7 +38,7 @@ extension Color {
 struct ContentView: View {
 
     @ObservedObject var browser: BonjourBrowser
-    let connectingDevices: Set<UUID>
+    @ObservedObject var appState: AppState
     let onDeviceSelected: (DiscoveredDevice) -> Void
 
     @State private var showManualConnect = false
@@ -51,15 +51,11 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 Image(systemName: "display")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.linearGradient(
-                        colors: [Color(hex: "a855f7"), Color(hex: "6366f1")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
+                    .foregroundColor(Color(hex: "fafafa")) // Zinc 50
 
                 Text(showManualConnect ? "Manual Connect" : "Screen Reflect")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(Color(hex: "f8fafc"))
+                    .foregroundColor(Color(hex: "fafafa")) // Zinc 50
 
                 Spacer()
 
@@ -71,9 +67,9 @@ struct ContentView: View {
                     }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(Color(hex: "94a3b8"))
+                            .foregroundColor(Color(hex: "a1a1aa")) // Zinc 400
                             .frame(width: 24, height: 24)
-                            .background(Color(hex: "1e293b"))
+                            .background(Color(hex: "27272a")) // Zinc 800
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -81,10 +77,10 @@ struct ContentView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background(Color(hex: "0f172a"))
+            .background(Color(hex: "09090b")) // Zinc 950
 
             Rectangle()
-                .fill(Color(hex: "1e293b"))
+                .fill(Color(hex: "27272a")) // Zinc 800
                 .frame(height: 1)
 
             // Show Manual Connect UI or Device List
@@ -113,43 +109,43 @@ struct ContentView: View {
                     if browser.isBrowsing {
                         ProgressView()
                             .controlSize(.large)
-                            .tint(Color(hex: "8b5cf6"))
+                            .tint(Color(hex: "fafafa")) // Zinc 50
 
                         Text("Searching for devices...")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(Color(hex: "cbd5e1"))
+                            .foregroundColor(Color(hex: "e4e4e7")) // Zinc 200
 
                         Text("Make sure your Android device is running Screen Reflect")
                             .font(.system(size: 12))
-                            .foregroundColor(Color(hex: "64748b"))
+                            .foregroundColor(Color(hex: "a1a1aa")) // Zinc 400
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 20)
                     } else {
                         ZStack {
                             Circle()
-                                .fill(Color(hex: "1e293b"))
+                                .fill(Color(hex: "18181b")) // Zinc 900
                                 .frame(width: 80, height: 80)
 
                             Image(systemName: "antenna.radiowaves.left.and.right.slash")
                                 .font(.system(size: 32, weight: .light))
-                                .foregroundColor(Color(hex: "64748b"))
+                                .foregroundColor(Color(hex: "52525b")) // Zinc 600
                         }
 
                         Text("No devices found")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(Color(hex: "94a3b8"))
+                            .foregroundColor(Color(hex: "71717a")) // Zinc 500
                     }
                 }
                 .frame(maxHeight: .infinity)
                 .frame(maxWidth: .infinity)
-                .background(Color(hex: "0a0f1e"))
+                .background(Color(hex: "09090b")) // Zinc 950
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 6) {
                         ForEach(browser.resolvedServices) { device in
                             DeviceRow(
                                 device: device,
-                                isConnecting: connectingDevices.contains(device.id)
+                                isConnecting: appState.connectingDevices.contains(device.id)
                             ) {
                                 onDeviceSelected(device)
                             }
@@ -158,11 +154,11 @@ struct ContentView: View {
                     .padding(.vertical, 10)
                     .padding(.horizontal, 12)
                 }
-                .background(Color(hex: "0a0f1e"))
+                .background(Color(hex: "09090b")) // Zinc 950
             }
 
             Rectangle()
-                .fill(Color(hex: "1e293b"))
+                .fill(Color(hex: "27272a")) // Zinc 800
                 .frame(height: 1)
 
             // Ultra-sleek Footer
@@ -170,13 +166,13 @@ struct ContentView: View {
                 if browser.isBrowsing {
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(Color(hex: "10b981"))
-                            .frame(width: 6, height: 6)
-                            .shadow(color: Color(hex: "10b981").opacity(0.5), radius: 4, x: 0, y: 0)
+                        .fill(Color(hex: "fafafa")) // Zinc 50
+                        .frame(width: 6, height: 6)
+                        .shadow(color: Color(hex: "fafafa").opacity(0.5), radius: 4, x: 0, y: 0)
 
                         Text("Searching...")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color(hex: "64748b"))
+                            .foregroundColor(Color(hex: "a1a1aa")) // Zinc 400
                     }
                 }
 
@@ -189,7 +185,7 @@ struct ContentView: View {
                 }) {
                     Text("Manual Connect")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Color(hex: "8b5cf6"))
+                        .foregroundColor(Color(hex: "fafafa")) // Zinc 50
                 }
                 .buttonStyle(.plain)
 
@@ -198,16 +194,16 @@ struct ContentView: View {
                 }) {
                     Text("Quit")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Color(hex: "64748b"))
+                        .foregroundColor(Color(hex: "71717a")) // Zinc 500
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color(hex: "0f172a"))
+            .background(Color(hex: "09090b")) // Zinc 950
         }
         .frame(width: 340, height: 420)
-        .background(Color(hex: "0a0f1e"))
+        .background(Color(hex: "09090b")) // Zinc 950
         .onAppear {
             browser.startBrowsing()
         }
@@ -264,7 +260,7 @@ struct ManualConnectContentView: View {
 
                     Text("adb forward tcp:<port> tcp:<port>")
                         .font(.caption2)
-                        .foregroundColor(.blue)
+                        .foregroundColor(.primary)
                         .monospaced()
                         .padding(.leading, 8)
 
@@ -313,30 +309,30 @@ struct DeviceRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 14) {
-                // Device Icon with gradient background
+                // Device Icon with monochrome background
                 ZStack {
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(LinearGradient(
-                            colors: [Color(hex: "6366f1"), Color(hex: "8b5cf6")],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ))
+                        .fill(Color(hex: "18181b")) // Zinc 900
                         .frame(width: 44, height: 44)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color(hex: "27272a"), lineWidth: 1) // Zinc 800
+                        )
 
                     Image(systemName: "iphone.gen3")
                         .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundColor(Color(hex: "fafafa")) // Zinc 50
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(device.name)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color(hex: "f1f5f9"))
+                        .foregroundColor(Color(hex: "fafafa")) // Zinc 50
                         .lineLimit(1)
 
                     Text("\(device.hostName):\(device.port)")
                         .font(.system(size: 11, weight: .regular))
-                        .foregroundColor(Color(hex: "64748b"))
+                        .foregroundColor(Color(hex: "71717a")) // Zinc 500
                         .lineLimit(1)
                 }
 
@@ -345,40 +341,26 @@ struct DeviceRow: View {
                 if isConnecting {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(Color(hex: "8b5cf6"))
+                        .tint(Color(hex: "fafafa")) // Zinc 50
                         .frame(width: 20, height: 20)
                 } else {
                     Image(systemName: "arrow.right")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Color(hex: isHovering ? "8b5cf6" : "475569"))
+                        .foregroundColor(Color(hex: isHovering ? "fafafa" : "52525b")) // Zinc 50 : Zinc 600
                 }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(hex: "1e293b"))
-                    .opacity(isHovering ? 0.8 : 0.5)
+                    .fill(Color(hex: "18181b")) // Zinc 900
+                    .opacity(isHovering ? 1.0 : 0.0)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(
-                        LinearGradient(
-                            colors: isHovering ?
-                                [Color(hex: "6366f1").opacity(0.5), Color(hex: "8b5cf6").opacity(0.5)] :
-                                [Color(hex: "334155").opacity(0.3), Color(hex: "334155").opacity(0.3)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
-            .shadow(color: isHovering ? Color(hex: "8b5cf6").opacity(0.2) : .clear, radius: 8, x: 0, y: 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isConnecting)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovering)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isConnecting)
         .onHover { hovering in
             isHovering = hovering && !isConnecting
@@ -391,7 +373,7 @@ struct DeviceRow: View {
 #Preview {
     ContentView(
         browser: BonjourBrowser(),
-        connectingDevices: [],
+        appState: AppState(),
         onDeviceSelected: { device in
             print("Selected: \(device.name)")
         }
