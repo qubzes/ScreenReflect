@@ -228,6 +228,9 @@ class AACDecoder: ObservableObject {
             logger.debug("📥 First 4 bytes: \(bytes)")
         }
 
+        let receiveTime = Date()
+        logger.debug("📥 Packet received at \(receiveTime.timeIntervalSince1970)")
+
         // Auto-start playback on first packet
         if !isPlaying {
             logger.info("▶️ Starting audio playback...")

@@ -21,8 +21,8 @@ class AudioEncoder(
         private const val MIME_TYPE = MediaFormat.MIMETYPE_AUDIO_AAC
         private const val SAMPLE_RATE = 48000
         private const val CHANNEL_COUNT = 2
-        private const val BIT_RATE = 192_000 // Increased from 128kbps for better quality
-        private const val TIMEOUT_USEC = 5000L // Reduced timeout for lower latency
+        private const val BIT_RATE = 256_000 // High quality
+        private const val TIMEOUT_USEC = 0L // Non-blocking
     }
 
     private var audioRecord: AudioRecord? = null
@@ -66,9 +66,10 @@ class AudioEncoder(
             AudioFormat.ENCODING_PCM_16BIT
         )
 
+        // Reduced buffer size for lower latency (2x min instead of 4x)
         audioRecord = AudioRecord.Builder()
             .setAudioFormat(audioFormat)
-            .setBufferSizeInBytes(minBufferSize * 4)
+            .setBufferSizeInBytes(minBufferSize * 2)
             .setAudioPlaybackCaptureConfig(config)
             .build()
     }
@@ -77,6 +78,9 @@ class AudioEncoder(
         val format = MediaFormat.createAudioFormat(MIME_TYPE, SAMPLE_RATE, CHANNEL_COUNT).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
             setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
+            // Low latency settings
+            setInteger(MediaFormat.KEY_LATENCY, 0)
+            setInteger(MediaFormat.KEY_PRIORITY, 0) // Real-time priority
         }
 
         mediaCodec = MediaCodec.createEncoderByType(MIME_TYPE).apply {
