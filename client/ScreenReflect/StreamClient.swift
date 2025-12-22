@@ -245,11 +245,11 @@ class StreamClient: ObservableObject {
                     }
 
                     // Process the packet on background queue for better performance
-                    Task { @MainActor in
-                        self.processPacket(type: packetType, data: payloadData)
-                        // Continue receiving next packet
-                        self.receivePacket()
-                    }
+                    // Removed Task { @MainActor } to avoid thread hopping and latency
+                    self.processPacket(type: packetType, data: payloadData)
+                    
+                    // Continue receiving next packet
+                    self.receivePacket()
                 }
             }
         }

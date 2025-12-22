@@ -9,11 +9,11 @@ import android.view.Surface
 import com.screenreflect.network.NetworkServer
 
 class VideoEncoder(
-    private val mediaProjection: MediaProjection,
-    private val networkServer: NetworkServer,
-    private val width: Int = 1920,
-    private val height: Int = 1080,
-    private val dpi: Int = 320
+        private val mediaProjection: MediaProjection,
+        private val networkServer: NetworkServer,
+        private val width: Int = 1920,
+        private val height: Int = 1080,
+        private val dpi: Int = 320
 ) : Thread() {
 
     companion object {
@@ -43,15 +43,16 @@ class VideoEncoder(
     private val bitRate = calculateBitrate(alignedWidth, alignedHeight)
 
     // Public accessors for actual encoded dimensions
-    val encodedWidth: Int get() = alignedWidth
-    val encodedHeight: Int get() = alignedHeight
+    val encodedWidth: Int
+        get() = alignedWidth
+    val encodedHeight: Int
+        get() = alignedHeight
 
     private var mediaCodec: MediaCodec? = null
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var inputSurface: Surface? = null
 
-    @Volatile
-    private var running = false
+    @Volatile private var running = false
 
     // Real-time timestamp tracking for A/V sync
     private var startTimeNanos: Long = 0L
@@ -69,41 +70,69 @@ class VideoEncoder(
     }
 
     private fun setupEncoder() {
-        val format = MediaFormat.createVideoFormat(MIME_TYPE, alignedWidth, alignedHeight).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
-            setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            setInteger(MediaFormat.KEY_PRIORITY, 0)
-            setInteger(MediaFormat.KEY_LATENCY, 0)
-            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-            // Use Main profile for better compression and quality
-            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileMain)
-            setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel42) // Level 4.2 for 1080p60
-            // Intra refresh for error resilience without full I-frames
-            setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, 10)
-            // Quality and complexity hints
-            setInteger(MediaFormat.KEY_COMPLEXITY, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-            setInteger(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1000000) // 1 second max
-        }
+        val format =
+                MediaFormat.createVideoFormat(MIME_TYPE, alignedWidth, alignedHeight).apply {
+                    setInteger(
+                            MediaFormat.KEY_COLOR_FORMAT,
+                            MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                    )
+                    setInteger(
+                            MediaFormat.KEY_BIT_RATE,
+                            10_000_000
+                    ) // 10 Mbps fixed for high quality
+                    setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
+                    setInteger(
+                            MediaFormat.KEY_I_FRAME_INTERVAL,
+                            1
+                    ) // I-frame every 1 second for faster recovery
+                    setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    setInteger(MediaFormat.KEY_PRIORITY, 0)
+                    setInteger(MediaFormat.KEY_LATENCY, 0)
+                    setInteger(
+                            MediaFormat.KEY_BITRATE_MODE,
+                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                    )
+                    // Use Main profile for better compression and quality
+                    setInteger(
+                            MediaFormat.KEY_PROFILE,
+                            MediaCodecInfo.CodecProfileLevel.AVCProfileMain
+                    )
+                    setInteger(
+                            MediaFormat.KEY_LEVEL,
+                            MediaCodecInfo.CodecProfileLevel.AVCLevel42
+                    ) // Level 4.2 for 1080p60
+                    // Intra refresh for error resilience without full I-frames
+                    // setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, 10) // Disabled: relying on
+                    // frequent I-frames
+                    // Quality and complexity hints
+                    setInteger(
+                            MediaFormat.KEY_COMPLEXITY,
+                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                    )
+                    setInteger(
+                            MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER,
+                            100_000
+                    ) // 100ms max to prevent decoder stall
+                }
 
-        mediaCodec = MediaCodec.createEncoderByType(MIME_TYPE).apply {
-            configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            inputSurface = createInputSurface()
-            start()
-        }
+        mediaCodec =
+                MediaCodec.createEncoderByType(MIME_TYPE).apply {
+                    configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    inputSurface = createInputSurface()
+                    start()
+                }
 
-        virtualDisplay = mediaProjection.createVirtualDisplay(
-            "ScreenReflect",
-            alignedWidth,
-            alignedHeight,
-            dpi,
-            android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            inputSurface,
-            null,
-            null
-        )
+        virtualDisplay =
+                mediaProjection.createVirtualDisplay(
+                        "ScreenReflect",
+                        alignedWidth,
+                        alignedHeight,
+                        dpi,
+                        android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                        inputSurface,
+                        null,
+                        null
+                )
 
         running = true
         startTimeNanos = System.nanoTime()
@@ -120,7 +149,8 @@ class VideoEncoder(
 
         while (running) {
             try {
-                val encoderStatus = mediaCodec?.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC) ?: continue
+                val encoderStatus =
+                        mediaCodec?.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC) ?: continue
 
                 when {
                     encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> {
@@ -142,7 +172,10 @@ class VideoEncoder(
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 encodedData.get(configData)
-                                networkServer.sendPacket(NetworkServer.PACKET_TYPE_CONFIG, configData)
+                                networkServer.sendPacket(
+                                        NetworkServer.PACKET_TYPE_CONFIG,
+                                        configData
+                                )
                                 Log.d(TAG, "Sent config packet: ${bufferInfo.size} bytes")
                             } else {
                                 // Regular video frame
@@ -151,17 +184,26 @@ class VideoEncoder(
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 encodedData.get(frameData)
 
-                                val isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                                networkServer.sendPacket(NetworkServer.PACKET_TYPE_VIDEO, frameData, isKeyFrame)
+                                val isKeyFrame =
+                                        (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                                networkServer.sendPacket(
+                                        NetworkServer.PACKET_TYPE_VIDEO,
+                                        frameData,
+                                        isKeyFrame
+                                )
 
                                 frameCount++
 
                                 // Periodic stats logging (every 5 seconds)
                                 val now = System.currentTimeMillis()
                                 if (now - lastFrameLog >= 5000) {
-                                    val elapsedSecs = (System.nanoTime() - startTimeNanos) / 1_000_000_000.0
+                                    val elapsedSecs =
+                                            (System.nanoTime() - startTimeNanos) / 1_000_000_000.0
                                     val actualFps = frameCount / elapsedSecs
-                                    Log.d(TAG, "Stats: ${String.format("%.1f", actualFps)} FPS, Frame#$frameCount, Size: ${frameData.size} bytes, KeyFrame: $isKeyFrame")
+                                    Log.d(
+                                            TAG,
+                                            "Stats: ${String.format("%.1f", actualFps)} FPS, Frame#$frameCount, Size: ${frameData.size} bytes, KeyFrame: $isKeyFrame"
+                                    )
                                     lastFrameLog = now
                                 }
                             }
@@ -190,20 +232,20 @@ class VideoEncoder(
     }
 
     /**
-     * Notify about dimension change without recreating encoder
-     * The VirtualDisplay will automatically adapt to orientation changes
+     * Notify about dimension change without recreating encoder The VirtualDisplay will
+     * automatically adapt to orientation changes
      */
     fun notifyDimensionChange(newWidth: Int, newHeight: Int) {
         val alignedW = alignDimension(newWidth)
         val alignedH = alignDimension(newHeight)
-        
+
         // Update internal dimensions for reporting
         alignedWidth = alignedW
         alignedHeight = alignedH
-        
+
         // Request keyframe for clean transition
         requestKeyFrame()
-        
+
         Log.i(TAG, "✅ Dimension change notified: ${alignedW}x${alignedH}")
     }
 
