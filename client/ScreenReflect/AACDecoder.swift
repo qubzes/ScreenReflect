@@ -3,7 +3,7 @@
 //  ScreenReflect
 //
 //  Decodes and plays AAC/ADTS audio stream.
-//  ADTS frames are self-describing - no external config needed.
+//  Real-time optimized with increased buffer headroom.
 //
 
 import Foundation
@@ -40,11 +40,12 @@ class AACDecoder: ObservableObject {
     private var pcmBuffer: UnsafeMutablePointer<UInt8>?
     private let pcmBufferSize: UInt32 = 32768
     
+    // Thread-safe buffer management
     private let lock = NSLock()
     
-    // Buffer limiting
+    // Buffer management - increased headroom to prevent audio breaks
     private var pendingBuffers: Int = 0
-    private let maxPendingBuffers: Int = 5
+    private let maxPendingBuffers: Int = 10  // Increased from 5 for more headroom
 
     // MARK: - Initialization
 
@@ -166,7 +167,7 @@ class AACDecoder: ObservableObject {
     func decode(data: Data) {
         lock.lock()
         
-        // Buffer limiting
+        // Buffer limiting - drop frames if too many pending to prevent audio delay
         if pendingBuffers >= maxPendingBuffers {
             lock.unlock()
             return
@@ -187,17 +188,26 @@ class AACDecoder: ObservableObject {
         }
 
         guard let player = playerNode,
-              let converter = audioConverter else { return }
+              let converter = audioConverter else {
+            logger.warning("⚠️ Audio decode skipped: player=\(self.playerNode != nil), converter=\(self.audioConverter != nil)")
+            return
+        }
 
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48000.0,
             channels: 2,
             interleaved: false
-        ) else { return }
+        ) else {
+            logger.error("❌ Failed to create audio format")
+            return
+        }
 
         // Strip ADTS header to get raw AAC data
-        guard let aacData = stripAdtsHeader(data) else { return }
+        guard let aacData = stripAdtsHeader(data) else {
+            logger.warning("⚠️ Failed to strip ADTS header from \(data.count) bytes")
+            return
+        }
         
         let inputBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: aacData.count)
         aacData.copyBytes(to: inputBuffer, count: aacData.count)
@@ -275,7 +285,12 @@ class AACDecoder: ObservableObject {
             nil
         )
 
-        guard status == noErr, ioOutputDataPacketSize > 0 else { return }
+        guard status == noErr, ioOutputDataPacketSize > 0 else {
+            if status != noErr {
+                logger.error("❌ AudioConverter failed with status: \(status)")
+            }
+            return
+        }
 
         let frameCapacity = AVAudioFrameCount(1024)
         guard let audioBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else { return }

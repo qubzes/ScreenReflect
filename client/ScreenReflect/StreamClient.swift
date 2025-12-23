@@ -2,7 +2,8 @@
 //  StreamClient.swift
 //  ScreenReflect
 //
-//  Connects to the Android device via TCP and demultiplexes the custom A/V stream.
+//  Ultra-low-latency TCP client for real-time A/V streaming.
+//  Uses highest priority queue for immediate packet processing.
 //
 
 import Foundation
@@ -70,13 +71,13 @@ class StreamClient: ObservableObject {
         let host = NWEndpoint.Host(device.hostName)
         let port = NWEndpoint.Port(integerLiteral: UInt16(device.port))
 
-        // Configure TCP parameters for reliability and low latency
+        // Configure TCP parameters for ultra-low-latency
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.enableKeepalive = true
-        tcpOptions.keepaliveIdle = 10  // Start keepalive after 10 seconds of idle
-        tcpOptions.keepaliveInterval = 5  // Send keepalive every 5 seconds
-        tcpOptions.keepaliveCount = 3  // Give up after 3 failed keepalives
-        tcpOptions.noDelay = true  // Disable Nagle's algorithm for lower latency
+        tcpOptions.keepaliveIdle = 10
+        tcpOptions.keepaliveInterval = 5
+        tcpOptions.keepaliveCount = 3
+        tcpOptions.noDelay = true  // CRITICAL: Disable Nagle's algorithm for immediate sends
 
         let parameters = NWParameters(tls: nil, tcp: tcpOptions)
         parameters.serviceClass = .responsiveData  // Low latency service class
@@ -91,8 +92,8 @@ class StreamClient: ObservableObject {
             }
         }
 
-        // Start connection
-        connection?.start(queue: .global(qos: .userInitiated))
+        // Start connection on HIGHEST priority queue for immediate packet processing
+        connection?.start(queue: DispatchQueue.global(qos: .userInteractive))
     }
 
     /// Disconnect from the device

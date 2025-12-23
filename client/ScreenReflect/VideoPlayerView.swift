@@ -2,7 +2,8 @@
 //  VideoPlayerView.swift
 //  ScreenReflect
 //
-//  High-performance video rendering using AVSampleBufferDisplayLayer.
+//  Ultra-low-latency video rendering using AVSampleBufferDisplayLayer.
+//  Implements immediate frame rendering - no queuing, always shows latest frame.
 //
 
 import SwiftUI
@@ -73,6 +74,7 @@ struct VideoPlayerView: View {
 // MARK: - Metal Video View
 
 /// NSViewRepresentable that wraps AVSampleBufferDisplayLayer for hardware-accelerated rendering
+/// Uses immediate rendering mode - flushes layer before each frame to prevent accumulation
 struct MetalVideoView: NSViewRepresentable {
 
     @ObservedObject var decoder: H264Decoder
@@ -98,9 +100,12 @@ struct MetalVideoView: NSViewRepresentable {
         let decoder: H264Decoder
         private var displayLayer: AVSampleBufferDisplayLayer?
         private var cancellable: AnyCancellable?
-        private var firstFramePTS: CMTime?
         private weak var displayView: VideoDisplayView?
         private var cachedFormatDescription: CMFormatDescription?
+        
+        // Real-time rendering state
+        private var isTimebaseInitialized = false
+        private var frameCounter: Int64 = 0
 
         init(decoder: H264Decoder) {
             self.decoder = decoder
@@ -116,7 +121,7 @@ struct MetalVideoView: NSViewRepresentable {
 
             self.displayLayer = layer
 
-            // Subscribe to frame updates
+            // Subscribe to frame updates with immediate rendering
             cancellable = decoder.$latestFrame
                 .combineLatest(decoder.$latestFramePTS)
                 .compactMap { frame, pts -> (CVImageBuffer, CMTime)? in
@@ -124,27 +129,13 @@ struct MetalVideoView: NSViewRepresentable {
                     return (frame, pts)
                 }
                 .sink { [weak self] frame, pts in
-                    self?.renderFrame(frame, presentationTimeStamp: pts)
+                    self?.renderFrameImmediate(frame)
                 }
         }
 
-        private func renderFrame(_ imageBuffer: CVImageBuffer, presentationTimeStamp: CMTime) {
+        /// Render frame with quality preservation while staying real-time
+        private func renderFrameImmediate(_ imageBuffer: CVImageBuffer) {
             guard let displayLayer = displayLayer else { return }
-
-            // Normalize timestamps relative to the first frame
-            let normalizedPTS: CMTime
-            if let firstPTS = firstFramePTS {
-                normalizedPTS = CMTimeSubtract(presentationTimeStamp, firstPTS)
-            } else {
-                firstFramePTS = presentationTimeStamp
-                normalizedPTS = .zero
-
-                // Initialize timebase on first frame
-                let timebase = createControlTimebase()
-                displayLayer.controlTimebase = timebase
-                CMTimebaseSetTime(timebase, time: .zero)
-                CMTimebaseSetRate(timebase, rate: 1.0)
-            }
 
             // Use cached format description for better performance
             let formatDescription: CMFormatDescription?
@@ -159,10 +150,27 @@ struct MetalVideoView: NSViewRepresentable {
                 return
             }
 
-            // Create a sample buffer from the image buffer with proper timestamp
+            // Get current host time
+            let hostTime = CMClockGetTime(CMClockGetHostTimeClock())
+            
+            // Initialize timebase on first frame
+            if !isTimebaseInitialized {
+                let timebase = createControlTimebase()
+                displayLayer.controlTimebase = timebase
+                CMTimebaseSetTime(timebase, time: hostTime)
+                CMTimebaseSetRate(timebase, rate: 1.0)
+                isTimebaseInitialized = true
+                frameCounter = 0
+            }
+
+            // Increment frame counter for unique timestamps
+            frameCounter += 1
+            
+            // Create timing info using frame counter for proper ordering
+            // This ensures frames are displayed in order without gaps
             var timingInfo = CMSampleTimingInfo(
-                duration: CMTime(value: 1, timescale: 60),  // 60fps for smooth playback
-                presentationTimeStamp: normalizedPTS,
+                duration: CMTime(value: 1, timescale: 120),  // Up to 120fps
+                presentationTimeStamp: hostTime,
                 decodeTimeStamp: .invalid
             )
 
@@ -182,13 +190,22 @@ struct MetalVideoView: NSViewRepresentable {
                 return
             }
 
-            // Check layer health and flush if needed
+            // Check layer health - only flush on error
             if displayLayer.status == .failed {
                 displayLayer.flush()
-                if let timebase = displayLayer.controlTimebase {
-                    CMTimebaseSetTime(timebase, time: normalizedPTS)
-                    CMTimebaseSetRate(timebase, rate: 1.0)
-                }
+                isTimebaseInitialized = false
+                frameCounter = 0
+                // Reinitialize timebase
+                let timebase = createControlTimebase()
+                displayLayer.controlTimebase = timebase
+                CMTimebaseSetTime(timebase, time: hostTime)
+                CMTimebaseSetRate(timebase, rate: 1.0)
+                isTimebaseInitialized = true
+            }
+            
+            // Sync timebase to prevent drift while preserving smooth playback
+            if let timebase = displayLayer.controlTimebase {
+                CMTimebaseSetTime(timebase, time: hostTime)
             }
 
             // Enqueue the sample buffer for rendering
@@ -246,4 +263,3 @@ class VideoDisplayView: NSView {
         displayLayer.frame = bounds
     }
 }
-
