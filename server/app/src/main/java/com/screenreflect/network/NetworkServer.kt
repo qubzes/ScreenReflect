@@ -54,8 +54,12 @@ class NetworkServer : Thread() {
     @Volatile private var cachedKeyFramePacket: ByteArray? = null
 
     @Volatile var onClientConnected: (() -> Unit)? = null
+    @Volatile var onClientDisconnected: (() -> Unit)? = null
 
     private val headerBuffer = ByteArray(HEADER_SIZE)
+
+    val isClientConnected: Boolean
+        get() = clientSocket != null && !clientSocket!!.isClosed && clientSocket!!.isConnected
 
     override fun run() {
         try {
@@ -256,10 +260,17 @@ class NetworkServer : Thread() {
 
     private fun cleanupClient() {
         try {
+            val wasConnected = clientSocket != null && !clientSocket!!.isClosed
+
             outputStream?.close()
             outputStream = null
             clientSocket?.close()
             clientSocket = null
+
+            if (wasConnected) {
+                Log.i(TAG, "Client disconnected")
+                onClientDisconnected?.invoke()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error cleaning up client", e)
         }

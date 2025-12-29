@@ -28,8 +28,10 @@ struct ScreenReflectApp: App {
                 browser: browser,
                 appState: appState,
                 onDeviceSelected: { device in
-                    appState.setConnecting(device.id, isConnecting: true)
-                    openPlayerWindow(for: device)
+                    Task { @MainActor in
+                        appState.setConnecting(device.id, isConnecting: true)
+                        openPlayerWindow(for: device)
+                    }
                 }
             )
             .frame(width: 320, height: 450)
@@ -41,6 +43,7 @@ struct ScreenReflectApp: App {
     // MARK: - Window Management
 
     /// Opens or focuses a player window for the specified device
+    @MainActor
     private func openPlayerWindow(for device: DiscoveredDevice) {
         // Check if window exists
         if let existingWindow = playerWindows[device.id] {
@@ -102,18 +105,24 @@ struct ScreenReflectApp: App {
         // Set minimum size
         window.minSize = NSSize(width: 480, height: 360)
 
-        // Observe connection to activate window and clear loading state
+        // Register stream client with AppState for connection tracking
+        appState.registerStreamClient(device.id, streamClient)
+
+        // Observe connection to show window when connected and close when disconnected
         var connectionObserver: AnyCancellable?
+        var hasConnected = false
         connectionObserver = streamClient.$isConnected
-            .filter { $0 }
-            .first()
-            .sink { [self] _ in
+            .sink { [weak window] isConnected in
                 DispatchQueue.main.async {
-                    self.appState.setConnecting(device.id, isConnecting: false)
-                    window.makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
+                    if isConnected {
+                        hasConnected = true
+                        window?.makeKeyAndOrderFront(nil)
+                        NSApp.activate(ignoringOtherApps: true)
+                    } else if hasConnected {
+                        // Connection lost - close window (AppState handles unregister)
+                        window?.close()
+                    }
                 }
-                connectionObserver?.cancel()
             }
 
         // Observe first frame to resize window to actual video dimensions
@@ -147,6 +156,7 @@ struct ScreenReflectApp: App {
         let windowDelegate = PlayerWindowDelegate {
             Task { @MainActor in
                 streamClient.disconnect()
+                self.appState.unregisterStreamClient(device.id)
                 self.playerWindows.removeValue(forKey: device.id)
             }
         }

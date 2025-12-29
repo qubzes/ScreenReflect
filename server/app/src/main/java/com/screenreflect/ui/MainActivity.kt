@@ -91,6 +91,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Set up client connection callback
+        ScreenReflectApplication.setClientConnectionCallback { isConnected ->
+            runOnUiThread {
+                viewModel.updateClientConnected(isConnected)
+            }
+        }
+
         // Request notification permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
@@ -162,6 +169,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         ScreenReflectApplication.clearPortUpdateCallback()
+        ScreenReflectApplication.clearClientConnectionCallback()
     }
 }
 
@@ -214,11 +222,15 @@ fun ScreenReflectApp(
 
             // Status text
             Text(
-                text = if (uiState.isStreaming) "Streaming Active" else "Ready to Stream",
+                text = if (uiState.isStreaming) {
+                    if (uiState.isClientConnected) "Connected" else "Waiting for connection"
+                } else {
+                    "Ready to Stream"
+                },
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            
+
             if (uiState.isStreaming && uiState.serverPort > 0) {
                  Spacer(modifier = Modifier.height(8.dp))
                  Text(

@@ -50,6 +50,7 @@ class MediaCaptureService : Service() {
 
     private var isRunning = false
     private var currentOrientation: Int = Configuration.ORIENTATION_UNDEFINED
+    private var isStopping = false  // Flag to prevent recursive stop calls
 
     override fun onCreate() {
         super.onCreate()
@@ -75,6 +76,9 @@ class MediaCaptureService : Service() {
 
     private fun startCapture(intent: Intent) {
         try {
+            // Reset stopping flag
+            isStopping = false
+
             // Start foreground service with notification
             startForegroundService()
 
@@ -173,6 +177,19 @@ class MediaCaptureService : Service() {
             // Set callback to request keyframe when client connects
             server.onClientConnected = {
                 encoder?.requestKeyFrame()
+                ScreenReflectApplication.notifyClientConnected(true)
+            }
+
+            // Set callback for client disconnection - stop streaming when client disconnects
+            server.onClientDisconnected = {
+                ScreenReflectApplication.notifyClientConnected(false)
+                // Only auto-stop if we're not already stopping (prevent recursive calls)
+                if (!isStopping) {
+                    Log.i(TAG, "Client disconnected, stopping streaming service")
+                    // Stop the service when client disconnects
+                    stopCapture()
+                    stopSelf()
+                }
             }
 
             isRunning = true
@@ -189,8 +206,14 @@ class MediaCaptureService : Service() {
     }
 
     private fun stopCapture() {
+        if (isStopping) return  // Prevent recursive calls
+
         Log.i(TAG, "Stopping capture")
+        isStopping = true
         isRunning = false
+
+        // Notify that client is disconnected
+        ScreenReflectApplication.notifyClientConnected(false)
 
         // Stop NSD
         nsdHelper?.stopPublishing()
@@ -273,6 +296,7 @@ class MediaCaptureService : Service() {
         super.onDestroy()
         stopCapture()
         isServiceRunning = false
+        isStopping = false  // Reset for next time
         Log.i(TAG, "Service destroyed")
     }
 

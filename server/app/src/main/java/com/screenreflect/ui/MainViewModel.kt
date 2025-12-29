@@ -34,6 +34,12 @@ class MainViewModel : ViewModel() {
         )
     }
 
+    fun updateClientConnected(isConnected: Boolean) {
+        _uiState.value = _uiState.value.copy(
+            isClientConnected = isConnected
+        )
+    }
+
     fun checkServiceState() {
         if (MediaCaptureService.isServiceRunning) {
             _uiState.value = _uiState.value.copy(
@@ -52,6 +58,7 @@ class MainViewModel : ViewModel() {
     data class UiState(
         val isStreaming: Boolean = false,
         val statusText: String = "Ready to stream",
-        val serverPort: Int = 0
+        val serverPort: Int = 0,
+        val isClientConnected: Boolean = false
     )
 }

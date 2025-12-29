@@ -40,6 +40,7 @@ class ScreenReflectApplication : Application() {
             private set
 
         private var portUpdateCallback: ((Int) -> Unit)? = null
+        private var clientConnectionCallback: ((Boolean) -> Unit)? = null
 
         fun updateServerPort(port: Int) {
             serverPort = port
@@ -56,6 +57,18 @@ class ScreenReflectApplication : Application() {
 
         fun clearPortUpdateCallback() {
             portUpdateCallback = null
+        }
+
+        fun notifyClientConnected(isConnected: Boolean) {
+            clientConnectionCallback?.invoke(isConnected)
+        }
+
+        fun setClientConnectionCallback(callback: (Boolean) -> Unit) {
+            clientConnectionCallback = callback
+        }
+
+        fun clearClientConnectionCallback() {
+            clientConnectionCallback = null
         }
     }
 }

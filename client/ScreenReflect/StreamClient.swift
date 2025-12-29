@@ -176,7 +176,11 @@ class StreamClient: ObservableObject {
 
     // MARK: - Published Properties
 
-    @Published var isConnected: Bool = false
+    @Published var isConnected: Bool = false {
+        didSet {
+            print("[StreamClient] isConnected didSet: \(isConnected) (was: \(oldValue))")
+        }
+    }
     @Published var connectionError: String?
     @Published var videoDimensions: CGSize?
 
@@ -188,7 +192,7 @@ class StreamClient: ObservableObject {
     // References to decoders (injected)
     private let h264Decoder: H264Decoder
     private let aacDecoder: AACDecoder
-    
+
     // Dedicated high-priority queue for network operations
     private let networkQueue = DispatchQueue(
         label: "com.screenreflect.network",
@@ -250,8 +254,11 @@ class StreamClient: ObservableObject {
             case .ready:
                 print("[StreamClient] Connection ready")
                 Task { @MainActor in
-                    self?.isConnected = true
-                    self?.connectionError = nil
+                    guard let self = self else { return }
+                    print("[StreamClient] About to set isConnected = true on MainActor (current: \(self.isConnected))")
+                    self.isConnected = true
+                    self.connectionError = nil
+                    print("[StreamClient] After setting isConnected, value is: \(self.isConnected)")
                 }
                 // Start receiving packets using standalone function
                 streamReceiveLoop(

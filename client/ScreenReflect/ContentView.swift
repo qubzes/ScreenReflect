@@ -145,7 +145,8 @@ struct ContentView: View {
                         ForEach(browser.resolvedServices) { device in
                             DeviceRow(
                                 device: device,
-                                isConnecting: appState.connectingDevices.contains(device.id)
+                                isConnecting: appState.connectingDevices.contains(device.id),
+                                isConnected: appState.connectedDevices.contains(device.id)
                             ) {
                                 onDeviceSelected(device)
                             }
@@ -303,6 +304,7 @@ struct DeviceRow: View {
 
     let device: DiscoveredDevice
     let isConnecting: Bool
+    var isConnected: Bool = false
     let action: () -> Void
     @State private var isHovering = false
 
@@ -338,7 +340,11 @@ struct DeviceRow: View {
 
                 Spacer()
 
-                if isConnecting {
+                if isConnected {
+                    Text("Connected")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(hex: "22c55e")) // Green
+                } else if isConnecting {
                     ProgressView()
                         .controlSize(.small)
                         .tint(Color(hex: "fafafa")) // Zinc 50
@@ -359,11 +365,12 @@ struct DeviceRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isConnecting)
+        .disabled(isConnecting || isConnected)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovering)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isConnecting)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isConnected)
         .onHover { hovering in
-            isHovering = hovering && !isConnecting
+            isHovering = hovering && !isConnecting && !isConnected
         }
     }
 }
