@@ -24,9 +24,9 @@ class NetworkServer : Thread() {
         const val PACKET_TYPE_AUDIO_CONFIG: Byte = 0x03
         const val PACKET_TYPE_DIMENSION: Byte = 0x04
 
-        // LARGE queues to prevent ANY frame drops - smooth is priority
-        private const val VIDEO_QUEUE_SIZE = 15 // ~250ms at 60fps - no drops
-        private const val AUDIO_QUEUE_SIZE = 10 // Smaller for A/V sync
+        // VERY LARGE queues - absolute smoothness is priority
+        private const val VIDEO_QUEUE_SIZE = 30 // ~500ms at 60fps - ultra smooth
+        private const val AUDIO_QUEUE_SIZE = 6 // Small - sync with immediate video display
 
         private const val HEADER_SIZE = 5
     }
@@ -201,7 +201,7 @@ class NetworkServer : Thread() {
         stream.write(data)
     }
 
-    /** BLOCKING put - waits if queue is full to NEVER drop frames. */
+    /** NON-BLOCKING - never stalls encoder thread to prevent jitter */
     fun sendPacket(type: Byte, data: ByteArray, isKeyFrame: Boolean = false) {
         when (type) {
             PACKET_TYPE_CONFIG -> cachedConfigPacket = data
@@ -216,24 +216,23 @@ class NetworkServer : Thread() {
             PACKET_TYPE_AUDIO_CONFIG -> pendingAudioConfigPacket.set(data)
             PACKET_TYPE_VIDEO -> {
                 val frame = FrameData(data, isKeyFrame)
-                try {
-                    // Blocking put with timeout - NEVER drop frames
-                    if (!videoQueue.offer(frame, 100, TimeUnit.MILLISECONDS)) {
-                        Log.w(TAG, "Video queue full, frame may be delayed")
-                        videoQueue.put(frame) // Block until space available
+                // Non-blocking: if full, drop oldest NON-keyframe
+                if (!videoQueue.offer(frame)) {
+                    // Queue full - remove oldest non-keyframe to make room
+                    val dropped = videoQueue.poll()
+                    if (dropped?.isKeyFrame == true) {
+                        // Oops, dropped a keyframe - put it back and drop current instead
+                        videoQueue.offer(dropped)
+                    } else {
+                        videoQueue.offer(frame)
                     }
-                } catch (e: InterruptedException) {
-                    // Interrupted, skip this frame
                 }
             }
             PACKET_TYPE_AUDIO -> {
-                try {
-                    if (!audioQueue.offer(data, 100, TimeUnit.MILLISECONDS)) {
-                        Log.w(TAG, "Audio queue full, frame may be delayed")
-                        audioQueue.put(data)
-                    }
-                } catch (e: InterruptedException) {
-                    // Interrupted, skip
+                // Non-blocking: if full, drop oldest
+                if (!audioQueue.offer(data)) {
+                    audioQueue.poll()
+                    audioQueue.offer(data)
                 }
             }
         }

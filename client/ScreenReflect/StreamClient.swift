@@ -258,9 +258,9 @@ class StreamClient: ObservableObject {
                     connection: newConnection,
                     h264Decoder: videoDecoder,
                     aacDecoder: audioDecoder,
-                    onDisconnect: { Task { @MainActor in self?.disconnect() } },
-                    onError: { error in Task { @MainActor in self?.connectionError = error } },
-                    onDimension: { dims in Task { @MainActor in self?.videoDimensions = dims } }
+                    onDisconnect: { [weak self] in Task { @MainActor in self?.disconnect() } },
+                    onError: { [weak self] error in Task { @MainActor in self?.connectionError = error } },
+                    onDimension: { [weak self] dims in Task { @MainActor in self?.videoDimensions = dims } }
                 )
 
             case .waiting(let error):

@@ -30,7 +30,7 @@ class VideoEncoder(
         private const val TAG = "VideoEncoder"
         private const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC
         private const val FRAME_RATE = 60
-        private const val I_FRAME_INTERVAL = 2 // I-frame every 2 seconds for good recovery
+        private const val I_FRAME_INTERVAL = 1 // I-frame every 1 second for fast motion recovery
         private const val TIMEOUT_USEC = 0L // Non-blocking for maximum throughput
 
         // Round UP to nearest multiple of 16 to avoid black bars
@@ -77,10 +77,10 @@ class VideoEncoder(
                             MediaFormat.KEY_COLOR_FORMAT,
                             MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
                     )
-                    // Fixed 10 Mbps for high quality 1080p60
-                    setInteger(MediaFormat.KEY_BIT_RATE, 10_000_000)
+                    // 20 Mbps for high quality fast-motion content
+                    setInteger(MediaFormat.KEY_BIT_RATE, 20_000_000)
                     setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
-                    // I-frame every 2 seconds - good balance
+                    // I-frame every 1 second - fast recovery for scrolling
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
 
                     // Low-latency encoding settings

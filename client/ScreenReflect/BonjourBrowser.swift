@@ -86,7 +86,9 @@ class BonjourBrowser: NSObject, ObservableObject {
 
         // Then scan every 5 seconds
         localhostScanTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.scanLocalhostPorts()
+            Task { @MainActor in
+                self?.scanLocalhostPorts()
+            }
         }
     }
 
