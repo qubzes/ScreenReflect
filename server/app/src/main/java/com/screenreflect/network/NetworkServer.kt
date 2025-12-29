@@ -26,7 +26,7 @@ class NetworkServer : Thread() {
 
         // VERY LARGE queues - absolute smoothness is priority
         private const val VIDEO_QUEUE_SIZE = 30 // ~500ms at 60fps - ultra smooth
-        private const val AUDIO_QUEUE_SIZE = 6 // Small - sync with immediate video display
+        private const val AUDIO_QUEUE_SIZE = 15 // Larger - smooth audio during fast content
 
         private const val HEADER_SIZE = 5
     }

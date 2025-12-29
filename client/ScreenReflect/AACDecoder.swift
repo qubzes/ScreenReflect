@@ -35,9 +35,9 @@ class AACDecoder: ObservableObject {
 
     private let lock = NSLock()
     
-    // Small buffer - video displays immediately, audio needs to match
+    // Larger buffer for smooth audio during fast content
     private var pendingBuffers: Int = 0
-    private let maxPendingBuffers: Int = 4  // ~85ms buffer - sync with video
+    private let maxPendingBuffers: Int = 10  // ~200ms buffer - smooth playback
     
     // Pre-allocated buffers
     private var inputBufferCapacity: Int = 8192
