@@ -11,6 +11,14 @@ import android.media.projection.MediaProjection
 import android.util.Log
 import com.screenreflect.network.NetworkServer
 
+/**
+ * Real-time audio encoder for low-latency streaming.
+ *
+ * Key optimizations:
+ * - Doubled audio buffer size for smoother capture
+ * - ADTS framing for self-contained audio packets
+ * - Non-blocking codec operations
+ */
 class AudioEncoder(
         private val mediaProjection: MediaProjection,
         private val networkServer: NetworkServer
@@ -26,10 +34,8 @@ class AudioEncoder(
 
         // ADTS constants
         private const val ADTS_HEADER_SIZE = 7
-        // Sample rate index for ADTS: 48000Hz = index 3
-        private const val SAMPLE_RATE_INDEX = 3
-        // Channel config: 2 channels = 2
-        private const val CHANNEL_CONFIG = 2
+        private const val SAMPLE_RATE_INDEX = 3 // 48000Hz
+        private const val CHANNEL_CONFIG = 2 // stereo
     }
 
     private var audioRecord: AudioRecord? = null
@@ -39,6 +45,9 @@ class AudioEncoder(
 
     private var startTimeNanos: Long = 0L
     private var packetCount: Long = 0L
+
+    // Pre-allocated ADTS header buffer
+    private val adtsHeader = ByteArray(ADTS_HEADER_SIZE)
 
     override fun run() {
         try {
@@ -74,10 +83,11 @@ class AudioEncoder(
                         AudioFormat.ENCODING_PCM_16BIT
                 )
 
+        // Use 2x minimum buffer for smoother capture
         audioRecord =
                 AudioRecord.Builder()
                         .setAudioFormat(audioFormat)
-                        .setBufferSizeInBytes(minBufferSize)
+                        .setBufferSizeInBytes(minBufferSize * 2)
                         .setAudioPlaybackCaptureConfig(config)
                         .build()
     }
@@ -101,60 +111,21 @@ class AudioEncoder(
                 }
     }
 
-    /**
-     * Generate ADTS header for AAC frame. ADTS allows the decoder to sync and decode each frame
-     * independently.
-     */
-    private fun createAdtsHeader(frameLength: Int): ByteArray {
-        val header = ByteArray(ADTS_HEADER_SIZE)
+    /** Generate ADTS header for AAC frame. Reuses pre-allocated buffer to avoid allocations. */
+    private fun fillAdtsHeader(frameLength: Int) {
         val packetLen = frameLength + ADTS_HEADER_SIZE
 
-        // ADTS header structure (7 bytes):
-        // Syncword: 0xFFF (12 bits)
-        // ID: 0 = MPEG-4, 1 = MPEG-2 (1 bit)
-        // Layer: 00 (2 bits)
-        // Protection absent: 1 = no CRC (1 bit)
-        // Profile: AAC-LC = 1 (2 bits, profile - 1)
-        // Sampling frequency index (4 bits)
-        // Private bit: 0 (1 bit)
-        // Channel configuration (3 bits)
-        // Original/copy: 0 (1 bit)
-        // Home: 0 (1 bit)
-        // Copyright ID bit: 0 (1 bit)
-        // Copyright ID start: 0 (1 bit)
-        // Frame length (13 bits)
-        // Buffer fullness: 0x7FF (11 bits)
-        // Number of AAC frames - 1: 0 (2 bits)
-
-        // Byte 0: 0xFF (syncword high)
-        header[0] = 0xFF.toByte()
-
-        // Byte 1: 0xF1 (syncword low + MPEG-4 + Layer 00 + no CRC)
-        header[1] = 0xF1.toByte()
-
-        // Byte 2: profile (AAC-LC=1, so 0) + sampling freq index + private bit + channel config
-        // high
-        // AAC-LC profile = 1, stored as (profile - 1) = 0
-        // Sampling frequency index for 48000Hz = 3
-        // Channel config = 2 (stereo)
-        header[2] =
+        // ADTS header structure (7 bytes)
+        adtsHeader[0] = 0xFF.toByte() // Syncword high
+        adtsHeader[1] = 0xF1.toByte() // Syncword low + MPEG-4 + no CRC
+        adtsHeader[2] =
                 ((0 shl 6) or (SAMPLE_RATE_INDEX shl 2) or (0 shl 1) or (CHANNEL_CONFIG shr 2))
                         .toByte()
-
-        // Byte 3: channel config low + original + home + copyright + copyright start + frame length
-        // high
-        header[3] = (((CHANNEL_CONFIG and 0x03) shl 6) or ((packetLen shr 11) and 0x03)).toByte()
-
-        // Byte 4: frame length middle
-        header[4] = ((packetLen shr 3) and 0xFF).toByte()
-
-        // Byte 5: frame length low + buffer fullness high
-        header[5] = (((packetLen and 0x07) shl 5) or 0x1F).toByte()
-
-        // Byte 6: buffer fullness low + number of frames - 1
-        header[6] = 0xFC.toByte()
-
-        return header
+        adtsHeader[3] =
+                (((CHANNEL_CONFIG and 0x03) shl 6) or ((packetLen shr 11) and 0x03)).toByte()
+        adtsHeader[4] = ((packetLen shr 3) and 0xFF).toByte()
+        adtsHeader[5] = (((packetLen and 0x07) shl 5) or 0x1F).toByte()
+        adtsHeader[6] = 0xFC.toByte()
     }
 
     private fun encodeLoop() {
@@ -164,26 +135,32 @@ class AudioEncoder(
         packetCount = 0L
         val bufferInfo = MediaCodec.BufferInfo()
         var lastPacketLog = System.currentTimeMillis()
-        var configSent = false
+        var consecutiveEmptyPolls = 0
 
         while (running) {
             try {
+                // Feed input data
                 feedInputToEncoder()
+
                 val encoderStatus =
                         mediaCodec?.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC) ?: continue
 
                 when {
-                    encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> continue
+                    encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        consecutiveEmptyPolls++
+                        if (consecutiveEmptyPolls > 50) {
+                            Thread.yield()
+                        }
+                    }
                     encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        // For ADTS, we don't need to send CSD separately
-                        // The ADTS header contains enough info for decoder to initialize
-                        // But we still send a marker so the client knows audio is configured
+                        // Send config marker for ADTS mode
                         val csd = byteArrayOf(0x11.toByte(), 0x90.toByte()) // AAC-LC 48kHz stereo
                         networkServer.sendPacket(NetworkServer.PACKET_TYPE_AUDIO_CONFIG, csd)
-                        configSent = true
                         Log.d(TAG, "Audio format configured (ADTS mode)")
                     }
                     encoderStatus >= 0 -> {
+                        consecutiveEmptyPolls = 0
+
                         val encodedData = mediaCodec?.getOutputBuffer(encoderStatus)
 
                         if (encodedData != null && bufferInfo.size > 0) {
@@ -193,15 +170,15 @@ class AudioEncoder(
                             encodedData.limit(bufferInfo.offset + bufferInfo.size)
                             encodedData.get(rawAacData)
 
-                            // Create ADTS header and combine with AAC data
-                            val adtsHeader = createAdtsHeader(rawAacData.size)
-                            val adtsFrame = ByteArray(adtsHeader.size + rawAacData.size)
-                            System.arraycopy(adtsHeader, 0, adtsFrame, 0, adtsHeader.size)
+                            // Create ADTS frame
+                            fillAdtsHeader(rawAacData.size)
+                            val adtsFrame = ByteArray(ADTS_HEADER_SIZE + rawAacData.size)
+                            System.arraycopy(adtsHeader, 0, adtsFrame, 0, ADTS_HEADER_SIZE)
                             System.arraycopy(
                                     rawAacData,
                                     0,
                                     adtsFrame,
-                                    adtsHeader.size,
+                                    ADTS_HEADER_SIZE,
                                     rawAacData.size
                             )
 
@@ -217,7 +194,7 @@ class AudioEncoder(
                                 val packetsPerSec = packetCount / elapsedSecs
                                 Log.d(
                                         TAG,
-                                        "Audio Stats: ${String.format("%.1f", packetsPerSec)} packets/s, Packet#$packetCount, ADTS frame: ${adtsFrame.size} bytes"
+                                        "Audio Stats: ${String.format("%.1f", packetsPerSec)} packets/s, Packet#$packetCount"
                                 )
                                 lastPacketLog = now
                             }

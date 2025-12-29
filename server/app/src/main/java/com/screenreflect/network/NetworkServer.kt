@@ -1,23 +1,18 @@
 package com.screenreflect.network
 
 import android.util.Log
-import java.io.OutputStream
+import java.io.BufferedOutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 /**
- * Real-time network server for screen mirroring.
+ * High-quality network server for smooth screen mirroring.
  *
- * Key design principles:
- * - BOUNDED LATENCY: Small queue (5 frames max) keeps us close to real-time
- * - DROP OLDEST: When queue is full, drop oldest frame (not newest) to stay current
- * - PRESERVE QUALITY: Don't drop frames unnecessarily - only when truly behind
- * - Priority ordering: Config > Dimension > Video > Audio
+ * Design: Large buffers to prevent ANY frame drops, ensuring perfectly smooth playback.
  */
 class NetworkServer : Thread() {
 
@@ -29,45 +24,42 @@ class NetworkServer : Thread() {
         const val PACKET_TYPE_AUDIO_CONFIG: Byte = 0x03
         const val PACKET_TYPE_DIMENSION: Byte = 0x04
 
-        // Small queue = low latency. At 60fps, 5 frames = ~83ms max latency
-        private const val VIDEO_QUEUE_SIZE = 5
-        private const val AUDIO_QUEUE_SIZE = 8
+        // LARGE queues to prevent ANY frame drops - smooth is priority
+        private const val VIDEO_QUEUE_SIZE = 15 // ~250ms at 60fps - no drops
+        private const val AUDIO_QUEUE_SIZE = 10 // Smaller for A/V sync
+
+        private const val HEADER_SIZE = 5
     }
 
     private var serverSocket: ServerSocket? = null
     private var clientSocket: Socket? = null
-    private var outputStream: OutputStream? = null
+    private var outputStream: BufferedOutputStream? = null
     @Volatile private var running = false
 
     val localPort: Int
         get() = serverSocket?.localPort ?: 0
 
-    // High-priority packets (must be sent, guaranteed delivery)
+    private data class FrameData(val data: ByteArray, val isKeyFrame: Boolean)
+
+    // Large queues - blocking put to NEVER drop frames
+    private val videoQueue = ArrayBlockingQueue<FrameData>(VIDEO_QUEUE_SIZE)
+    private val audioQueue = ArrayBlockingQueue<ByteArray>(AUDIO_QUEUE_SIZE)
+
     private val pendingConfigPacket = AtomicReference<ByteArray?>(null)
     private val pendingAudioConfigPacket = AtomicReference<ByteArray?>(null)
     private val pendingDimensionPacket = AtomicReference<ByteArray?>(null)
 
-    // Bounded queues for video/audio - drops OLDEST when full (not newest!)
-    // This keeps latency bounded while preserving as many frames as possible
-    private val videoQueue = ArrayBlockingQueue<ByteArray>(VIDEO_QUEUE_SIZE)
-    private val audioQueue = ArrayBlockingQueue<ByteArray>(AUDIO_QUEUE_SIZE)
-
-    // Cached packets for new client connections
     @Volatile private var cachedConfigPacket: ByteArray? = null
     @Volatile private var cachedAudioConfigPacket: ByteArray? = null
     @Volatile private var cachedKeyFramePacket: ByteArray? = null
 
-    // Signal that new data is available
-    @Volatile private var hasNewData = false
-    private val dataLock = ReentrantLock()
-    private val dataCondition = dataLock.newCondition()
-
     @Volatile var onClientConnected: (() -> Unit)? = null
+
+    private val headerBuffer = ByteArray(HEADER_SIZE)
 
     override fun run() {
         try {
             serverSocket = ServerSocket(0).apply { reuseAddress = true }
-
             running = true
 
             while (running && !isInterrupted) {
@@ -76,8 +68,8 @@ class NetworkServer : Thread() {
                     clientSocket =
                             serverSocket?.accept()?.apply {
                                 keepAlive = true
-                                tcpNoDelay = true // Critical: Disable Nagle's algorithm
-                                sendBufferSize = 1024 * 1024 // 1MB send buffer
+                                tcpNoDelay = true
+                                sendBufferSize = 2 * 1024 * 1024 // 2MB send buffer
                                 receiveBufferSize = 64 * 1024
                                 soTimeout = 0
                             }
@@ -85,31 +77,26 @@ class NetworkServer : Thread() {
                     if (clientSocket == null) continue
 
                     Log.i(TAG, "Client connected: ${clientSocket?.inetAddress}")
-                    outputStream = clientSocket?.getOutputStream()
+                    outputStream =
+                            BufferedOutputStream(clientSocket?.getOutputStream(), 1024 * 1024)
 
-                    // Clear any stale packets
                     clearAllPackets()
 
-                    // Send cached config packets immediately
-                    cachedConfigPacket?.let { sendPacketInternal(PACKET_TYPE_CONFIG, it) }
-                    cachedAudioConfigPacket?.let {
-                        sendPacketInternal(PACKET_TYPE_AUDIO_CONFIG, it)
-                    }
-
-                    // Send last keyframe immediately
+                    cachedConfigPacket?.let { writePacketDirect(PACKET_TYPE_CONFIG, it) }
+                    cachedAudioConfigPacket?.let { writePacketDirect(PACKET_TYPE_AUDIO_CONFIG, it) }
                     cachedKeyFramePacket?.let {
                         Log.i(TAG, "Sending cached keyframe (${it.size} bytes)")
-                        sendPacketInternal(PACKET_TYPE_VIDEO, it)
+                        writePacketDirect(PACKET_TYPE_VIDEO, it)
                     }
+                    outputStream?.flush()
 
                     onClientConnected?.invoke()
 
-                    // Real-time send loop
                     sendLoop()
                 } catch (e: Exception) {
                     if (running) {
                         Log.e(TAG, "Error accepting client", e)
-                        Thread.sleep(500)
+                        Thread.sleep(100)
                     }
                 } finally {
                     cleanupClient()
@@ -122,59 +109,72 @@ class NetworkServer : Thread() {
         }
     }
 
-    /**
-     * Real-time send loop with quality preservation. Priority order: Config > AudioConfig >
-     * Dimension > Video > Audio Sends ALL queued frames in order for smooth playback.
-     */
     private fun sendLoop() {
         try {
             while (running &&
                     clientSocket != null &&
                     !clientSocket!!.isClosed &&
                     clientSocket!!.isConnected) {
+
                 var sentSomething = false
 
-                // 1. Highest priority: Config packets (must be delivered)
+                // Config packets
                 pendingConfigPacket.getAndSet(null)?.let { data ->
-                    sendPacketInternal(PACKET_TYPE_CONFIG, data)
+                    writePacketDirect(PACKET_TYPE_CONFIG, data)
                     sentSomething = true
                 }
 
                 pendingAudioConfigPacket.getAndSet(null)?.let { data ->
-                    sendPacketInternal(PACKET_TYPE_AUDIO_CONFIG, data)
+                    writePacketDirect(PACKET_TYPE_AUDIO_CONFIG, data)
                     sentSomething = true
                 }
 
-                // 2. High priority: Dimension updates
                 pendingDimensionPacket.getAndSet(null)?.let { data ->
-                    sendPacketInternal(PACKET_TYPE_DIMENSION, data)
+                    writePacketDirect(PACKET_TYPE_DIMENSION, data)
                     sentSomething = true
                 }
 
-                // 3. Video frames - send all queued frames in order
-                var videoFrame = videoQueue.poll()
-                while (videoFrame != null) {
-                    sendPacketInternal(PACKET_TYPE_VIDEO, videoFrame)
-                    sentSomething = true
-                    videoFrame = videoQueue.poll()
-                }
+                // Interleaved sending: alternate video and audio for better sync
+                var videoCount = 0
+                var audioCount = 0
+                val maxBatch = 5 // Send up to 5 of each per iteration
 
-                // 4. Audio frames - send all queued frames in order
-                var audioFrame = audioQueue.poll()
-                while (audioFrame != null) {
-                    sendPacketInternal(PACKET_TYPE_AUDIO, audioFrame)
-                    sentSomething = true
-                    audioFrame = audioQueue.poll()
-                }
+                while (videoCount < maxBatch || audioCount < maxBatch) {
+                    var didSomething = false
 
-                // If nothing to send, wait briefly for new data
-                if (!sentSomething) {
-                    dataLock.withLock {
-                        if (!hasNewData) {
-                            // Wait up to 1ms for new data, then check again
-                            dataCondition.awaitNanos(1_000_000L)
+                    // Send one video frame
+                    if (videoCount < maxBatch) {
+                        val videoFrame = videoQueue.poll()
+                        if (videoFrame != null) {
+                            writePacketDirect(PACKET_TYPE_VIDEO, videoFrame.data)
+                            sentSomething = true
+                            didSomething = true
+                            videoCount++
                         }
-                        hasNewData = false
+                    }
+
+                    // Send one audio frame (interleaved)
+                    if (audioCount < maxBatch) {
+                        val audioFrame = audioQueue.poll()
+                        if (audioFrame != null) {
+                            writePacketDirect(PACKET_TYPE_AUDIO, audioFrame)
+                            sentSomething = true
+                            didSomething = true
+                            audioCount++
+                        }
+                    }
+
+                    if (!didSomething) break
+                }
+
+                if (sentSomething) {
+                    outputStream?.flush()
+                } else {
+                    // Wait for new data
+                    val frame = videoQueue.poll(5, TimeUnit.MILLISECONDS)
+                    if (frame != null) {
+                        writePacketDirect(PACKET_TYPE_VIDEO, frame.data)
+                        outputStream?.flush()
                     }
                 }
             }
@@ -185,12 +185,24 @@ class NetworkServer : Thread() {
         }
     }
 
-    /**
-     * Submit a packet for sending. Video/Audio: Added to bounded queue. If queue full, DROP OLDEST
-     * frame (not newest). Config/Dimension: Stored until sent (guaranteed delivery)
-     */
+    private fun writePacketDirect(type: Byte, data: ByteArray) {
+        val stream = outputStream ?: return
+        val socket = clientSocket ?: return
+
+        if (socket.isClosed || !socket.isConnected) return
+
+        headerBuffer[0] = type
+        headerBuffer[1] = ((data.size shr 24) and 0xFF).toByte()
+        headerBuffer[2] = ((data.size shr 16) and 0xFF).toByte()
+        headerBuffer[3] = ((data.size shr 8) and 0xFF).toByte()
+        headerBuffer[4] = (data.size and 0xFF).toByte()
+
+        stream.write(headerBuffer)
+        stream.write(data)
+    }
+
+    /** BLOCKING put - waits if queue is full to NEVER drop frames. */
     fun sendPacket(type: Byte, data: ByteArray, isKeyFrame: Boolean = false) {
-        // Cache for new connections
         when (type) {
             PACKET_TYPE_CONFIG -> cachedConfigPacket = data
             PACKET_TYPE_AUDIO_CONFIG -> cachedAudioConfigPacket = data
@@ -203,63 +215,36 @@ class NetworkServer : Thread() {
             PACKET_TYPE_CONFIG -> pendingConfigPacket.set(data)
             PACKET_TYPE_AUDIO_CONFIG -> pendingAudioConfigPacket.set(data)
             PACKET_TYPE_VIDEO -> {
-                // If queue is full, drop OLDEST frame to make room
-                while (!videoQueue.offer(data)) {
-                    videoQueue.poll() // Remove oldest
+                val frame = FrameData(data, isKeyFrame)
+                try {
+                    // Blocking put with timeout - NEVER drop frames
+                    if (!videoQueue.offer(frame, 100, TimeUnit.MILLISECONDS)) {
+                        Log.w(TAG, "Video queue full, frame may be delayed")
+                        videoQueue.put(frame) // Block until space available
+                    }
+                } catch (e: InterruptedException) {
+                    // Interrupted, skip this frame
                 }
             }
             PACKET_TYPE_AUDIO -> {
-                // If queue is full, drop OLDEST frame to make room
-                while (!audioQueue.offer(data)) {
-                    audioQueue.poll() // Remove oldest
+                try {
+                    if (!audioQueue.offer(data, 100, TimeUnit.MILLISECONDS)) {
+                        Log.w(TAG, "Audio queue full, frame may be delayed")
+                        audioQueue.put(data)
+                    }
+                } catch (e: InterruptedException) {
+                    // Interrupted, skip
                 }
             }
         }
-
-        // Signal that new data is available
-        signalNewData()
     }
 
-    /** Send dimension update (high priority, guaranteed delivery) */
     fun sendDimensionUpdate(width: Int, height: Int) {
         Log.i(TAG, "Sending dimension update: ${width}x${height}")
         val buffer = ByteBuffer.allocate(8)
         buffer.putInt(width)
         buffer.putInt(height)
         pendingDimensionPacket.set(buffer.array())
-        signalNewData()
-    }
-
-    private fun signalNewData() {
-        dataLock.withLock {
-            hasNewData = true
-            dataCondition.signal()
-        }
-    }
-
-    private fun sendPacketInternal(type: Byte, data: ByteArray) {
-        try {
-            val stream = outputStream ?: return
-            val socket = clientSocket ?: return
-
-            if (socket.isClosed || !socket.isConnected) return
-
-            // Write type (1 byte)
-            stream.write(type.toInt())
-
-            // Write length (4 bytes, big-endian)
-            val lengthBuffer = ByteBuffer.allocate(4)
-            lengthBuffer.putInt(data.size)
-            stream.write(lengthBuffer.array())
-
-            // Write data
-            stream.write(data)
-
-            // Flush for minimal latency
-            stream.flush()
-        } catch (e: Exception) {
-            throw e
-        }
     }
 
     private fun clearAllPackets() {
@@ -284,7 +269,6 @@ class NetworkServer : Thread() {
     fun close() {
         running = false
         interrupt()
-        signalNewData() // Wake up send loop
 
         try {
             serverSocket?.close()

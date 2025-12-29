@@ -2,8 +2,8 @@
 //  VideoPlayerView.swift
 //  ScreenReflect
 //
-//  Ultra-low-latency video rendering using AVSampleBufferDisplayLayer.
-//  Implements immediate frame rendering - no queuing, always shows latest frame.
+//  Hardware-accelerated video rendering using AVSampleBufferDisplayLayer.
+//  Optimized for smooth real-time playback.
 //
 
 import SwiftUI
@@ -60,7 +60,6 @@ struct VideoPlayerView: View {
             .onDisappear {
                 streamClient.disconnect()
             }
-            // Listen for dimension changes from server
             .onChange(of: streamClient.videoDimensions) { newDimensions in
                 if let dimensions = newDimensions {
                     print("[VideoPlayerView] Dimension change detected: \(Int(dimensions.width))x\(Int(dimensions.height))")
@@ -73,8 +72,7 @@ struct VideoPlayerView: View {
 
 // MARK: - Metal Video View
 
-/// NSViewRepresentable that wraps AVSampleBufferDisplayLayer for hardware-accelerated rendering
-/// Uses immediate rendering mode - flushes layer before each frame to prevent accumulation
+/// NSViewRepresentable for hardware-accelerated rendering
 struct MetalVideoView: NSViewRepresentable {
 
     @ObservedObject var decoder: H264Decoder
@@ -85,9 +83,7 @@ struct MetalVideoView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: VideoDisplayView, context: Context) {
-        // No updates needed - dimensions are handled automatically
-    }
+    func updateNSView(_ nsView: VideoDisplayView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(decoder: decoder)
@@ -103,9 +99,9 @@ struct MetalVideoView: NSViewRepresentable {
         private weak var displayView: VideoDisplayView?
         private var cachedFormatDescription: CMFormatDescription?
         
-        // Real-time rendering state
+        // Timebase management
+        private var controlTimebase: CMTimebase?
         private var isTimebaseInitialized = false
-        private var frameCounter: Int64 = 0
 
         init(decoder: H264Decoder) {
             self.decoder = decoder
@@ -115,29 +111,24 @@ struct MetalVideoView: NSViewRepresentable {
             self.displayView = view
             let layer = view.displayLayer
 
-            // Configure the display layer to fill the entire window
-            layer.videoGravity = .resizeAspectFill  // Fill window, crop if needed
+            layer.videoGravity = .resizeAspectFill
             layer.backgroundColor = CGColor.black
 
             self.displayLayer = layer
 
-            // Subscribe to frame updates with immediate rendering
+            // Subscribe to frame updates
             cancellable = decoder.$latestFrame
-                .combineLatest(decoder.$latestFramePTS)
-                .compactMap { frame, pts -> (CVImageBuffer, CMTime)? in
-                    guard let frame = frame else { return nil }
-                    return (frame, pts)
-                }
-                .sink { [weak self] frame, pts in
-                    self?.renderFrameImmediate(frame)
+                .compactMap { $0 }
+                .sink { [weak self] frame in
+                    self?.renderFrame(frame)
                 }
         }
 
-        /// Render frame with quality preservation while staying real-time
-        private func renderFrameImmediate(_ imageBuffer: CVImageBuffer) {
+        /// Render frame to display layer
+        private func renderFrame(_ imageBuffer: CVImageBuffer) {
             guard let displayLayer = displayLayer else { return }
 
-            // Use cached format description for better performance
+            // Create format description (cached)
             let formatDescription: CMFormatDescription?
             if let cached = cachedFormatDescription {
                 formatDescription = cached
@@ -146,30 +137,19 @@ struct MetalVideoView: NSViewRepresentable {
                 cachedFormatDescription = formatDescription
             }
 
-            guard let formatDescription = formatDescription else {
-                return
-            }
+            guard let formatDescription = formatDescription else { return }
 
             // Get current host time
             let hostTime = CMClockGetTime(CMClockGetHostTimeClock())
             
-            // Initialize timebase on first frame
-            if !isTimebaseInitialized {
-                let timebase = createControlTimebase()
-                displayLayer.controlTimebase = timebase
-                CMTimebaseSetTime(timebase, time: hostTime)
-                CMTimebaseSetRate(timebase, rate: 1.0)
-                isTimebaseInitialized = true
-                frameCounter = 0
+            // Initialize or reset timebase if needed
+            if !isTimebaseInitialized || displayLayer.status == .failed {
+                resetTimebase(displayLayer: displayLayer, startTime: hostTime)
             }
-
-            // Increment frame counter for unique timestamps
-            frameCounter += 1
             
-            // Create timing info using frame counter for proper ordering
-            // This ensures frames are displayed in order without gaps
+            // Create timing info
             var timingInfo = CMSampleTimingInfo(
-                duration: CMTime(value: 1, timescale: 120),  // Up to 120fps
+                duration: CMTime(value: 1, timescale: 60),  // 60fps
                 presentationTimeStamp: hostTime,
                 decodeTimeStamp: .invalid
             )
@@ -186,30 +166,34 @@ struct MetalVideoView: NSViewRepresentable {
                 sampleBufferOut: &sampleBuffer
             )
 
-            guard status == noErr, let sampleBuffer = sampleBuffer else {
-                return
-            }
+            guard status == noErr, let sampleBuffer = sampleBuffer else { return }
 
-            // Check layer health - only flush on error
+            // Enqueue for rendering
+            displayLayer.enqueue(sampleBuffer)
+        }
+        
+        private func resetTimebase(displayLayer: AVSampleBufferDisplayLayer, startTime: CMTime) {
+            // Flush on error
             if displayLayer.status == .failed {
                 displayLayer.flush()
-                isTimebaseInitialized = false
-                frameCounter = 0
-                // Reinitialize timebase
-                let timebase = createControlTimebase()
-                displayLayer.controlTimebase = timebase
-                CMTimebaseSetTime(timebase, time: hostTime)
-                CMTimebaseSetRate(timebase, rate: 1.0)
-                isTimebaseInitialized = true
+                cachedFormatDescription = nil
             }
             
-            // Sync timebase to prevent drift while preserving smooth playback
-            if let timebase = displayLayer.controlTimebase {
-                CMTimebaseSetTime(timebase, time: hostTime)
+            // Create new timebase
+            var timebase: CMTimebase?
+            CMTimebaseCreateWithSourceClock(
+                allocator: kCFAllocatorDefault,
+                sourceClock: CMClockGetHostTimeClock(),
+                timebaseOut: &timebase
+            )
+            
+            if let timebase = timebase {
+                CMTimebaseSetTime(timebase, time: startTime)
+                CMTimebaseSetRate(timebase, rate: 1.0)
+                displayLayer.controlTimebase = timebase
+                self.controlTimebase = timebase
+                isTimebaseInitialized = true
             }
-
-            // Enqueue the sample buffer for rendering
-            displayLayer.enqueue(sampleBuffer)
         }
 
         private func createFormatDescription(for imageBuffer: CVImageBuffer) -> CMFormatDescription? {
@@ -221,20 +205,10 @@ struct MetalVideoView: NSViewRepresentable {
             )
             return formatDescription
         }
-
-        private func createControlTimebase() -> CMTimebase {
-            var timebase: CMTimebase?
-            CMTimebaseCreateWithSourceClock(
-                allocator: kCFAllocatorDefault,
-                sourceClock: CMClockGetHostTimeClock(),
-                timebaseOut: &timebase
-            )
-            return timebase!
-        }
     }
 }
 
-// MARK: - Custom NSView with AVSampleBufferDisplayLayer
+// MARK: - Custom NSView
 
 class VideoDisplayView: NSView {
 
@@ -254,7 +228,7 @@ class VideoDisplayView: NSView {
         wantsLayer = true
         layer = displayLayer
         displayLayer.frame = bounds
-        displayLayer.videoGravity = .resizeAspect  // Maintain aspect ratio, fit within bounds
+        displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = CGColor.black
     }
 

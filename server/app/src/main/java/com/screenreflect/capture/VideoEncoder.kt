@@ -8,6 +8,16 @@ import android.util.Log
 import android.view.Surface
 import com.screenreflect.network.NetworkServer
 
+/**
+ * Real-time video encoder optimized for low-latency streaming.
+ *
+ * Key optimizations:
+ * - Hardware-accelerated H.264 encoding
+ * - CBR mode for consistent bandwidth
+ * - Low-latency flags enabled
+ * - I-frame every 2 seconds (balance between recovery and bandwidth)
+ * - Non-blocking output buffer dequeue
+ */
 class VideoEncoder(
         private val mediaProjection: MediaProjection,
         private val networkServer: NetworkServer,
@@ -20,27 +30,18 @@ class VideoEncoder(
         private const val TAG = "VideoEncoder"
         private const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC
         private const val FRAME_RATE = 60
-        private const val I_FRAME_INTERVAL = 2 // I-frame every 2 seconds for better error recovery
+        private const val I_FRAME_INTERVAL = 2 // I-frame every 2 seconds for good recovery
         private const val TIMEOUT_USEC = 0L // Non-blocking for maximum throughput
 
         // Round UP to nearest multiple of 16 to avoid black bars
-        // Example: 1079 -> 1088 (not 1072)
         private fun alignDimension(dimension: Int): Int {
             val remainder = dimension % 16
             return if (remainder == 0) dimension else dimension + (16 - remainder)
-        }
-
-        private fun calculateBitrate(width: Int, height: Int): Int {
-            val pixels = width * height
-            // Optimized bitrate: 0.07 bits per pixel (balanced quality/bandwidth)
-            // For 1920x1080@60fps: ~8.6 Mbps (vs previous ~15 Mbps)
-            return (pixels * FRAME_RATE * 0.07 * 1.0).toInt()
         }
     }
 
     private var alignedWidth = alignDimension(width)
     private var alignedHeight = alignDimension(height)
-    private val bitRate = calculateBitrate(alignedWidth, alignedHeight)
 
     // Public accessors for actual encoded dimensions
     val encodedWidth: Int
@@ -54,7 +55,7 @@ class VideoEncoder(
 
     @Volatile private var running = false
 
-    // Real-time timestamp tracking for A/V sync
+    // Stats tracking
     private var startTimeNanos: Long = 0L
     private var frameCount: Long = 0L
 
@@ -76,23 +77,24 @@ class VideoEncoder(
                             MediaFormat.KEY_COLOR_FORMAT,
                             MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
                     )
-                    setInteger(
-                            MediaFormat.KEY_BIT_RATE,
-                            10_000_000
-                    ) // 10 Mbps fixed for high quality
+                    // Fixed 10 Mbps for high quality 1080p60
+                    setInteger(MediaFormat.KEY_BIT_RATE, 10_000_000)
                     setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
-                    setInteger(
-                            MediaFormat.KEY_I_FRAME_INTERVAL,
-                            1
-                    ) // I-frame every 1 second for faster recovery
+                    // I-frame every 2 seconds - good balance
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
+
+                    // Low-latency encoding settings
                     setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-                    setInteger(MediaFormat.KEY_PRIORITY, 0)
+                    setInteger(MediaFormat.KEY_PRIORITY, 0) // Real-time priority
                     setInteger(MediaFormat.KEY_LATENCY, 0)
+
+                    // CBR for consistent streaming
                     setInteger(
                             MediaFormat.KEY_BITRATE_MODE,
                             MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
                     )
-                    // Use Main profile for better compression and quality
+
+                    // Use Main profile for good compression
                     setInteger(
                             MediaFormat.KEY_PROFILE,
                             MediaCodecInfo.CodecProfileLevel.AVCProfileMain
@@ -101,18 +103,6 @@ class VideoEncoder(
                             MediaFormat.KEY_LEVEL,
                             MediaCodecInfo.CodecProfileLevel.AVCLevel42
                     ) // Level 4.2 for 1080p60
-                    // Intra refresh for error resilience without full I-frames
-                    // setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, 10) // Disabled: relying on
-                    // frequent I-frames
-                    // Quality and complexity hints
-                    setInteger(
-                            MediaFormat.KEY_COMPLEXITY,
-                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
-                    )
-                    setInteger(
-                            MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER,
-                            100_000
-                    ) // 100ms max to prevent decoder stall
                 }
 
         mediaCodec =
@@ -138,14 +128,15 @@ class VideoEncoder(
         startTimeNanos = System.nanoTime()
         frameCount = 0L
 
-        // Request initial keyframe after a brief stabilization period
-        Thread.sleep(100)
+        // Request initial keyframe after brief stabilization
+        Thread.sleep(50)
         requestKeyFrame()
     }
 
     private fun encodeLoop() {
         val bufferInfo = MediaCodec.BufferInfo()
         var lastFrameLog = System.currentTimeMillis()
+        var consecutiveEmptyPolls = 0
 
         while (running) {
             try {
@@ -154,8 +145,12 @@ class VideoEncoder(
 
                 when {
                     encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                        // Non-blocking mode: yield to prevent tight loop
-                        Thread.yield()
+                        // Non-blocking: increment counter for adaptive wait
+                        consecutiveEmptyPolls++
+                        if (consecutiveEmptyPolls > 100) {
+                            // After 100 empty polls, yield to prevent CPU spin
+                            Thread.yield()
+                        }
                         continue
                     }
                     encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -163,6 +158,8 @@ class VideoEncoder(
                         continue
                     }
                     encoderStatus >= 0 -> {
+                        consecutiveEmptyPolls = 0 // Reset on successful dequeue
+
                         val encodedData = mediaCodec?.getOutputBuffer(encoderStatus)
 
                         if (encodedData != null && bufferInfo.size > 0) {
@@ -227,13 +224,12 @@ class VideoEncoder(
     fun stopEncoding() {
         Log.d(TAG, "stopEncoding() called")
         running = false
-        // Interrupt thread to break out of encode loop if in yield/sleep
         interrupt()
     }
 
     /**
-     * Notify about dimension change without recreating encoder The VirtualDisplay will
-     * automatically adapt to orientation changes
+     * Notify about dimension change without recreating encoder. The VirtualDisplay will
+     * automatically adapt to orientation changes.
      */
     fun notifyDimensionChange(newWidth: Int, newHeight: Int) {
         val alignedW = alignDimension(newWidth)

@@ -2,8 +2,7 @@
 //  H264Decoder.swift
 //  ScreenReflect
 //
-//  Decodes H.264 video stream using Apple's VideoToolbox framework.
-//  Ultra-low-latency optimized - immediate frame delivery, no queuing.
+//  H.264 decoder using VideoToolbox with synchronous decoding for frame order.
 //
 
 import Foundation
@@ -12,7 +11,7 @@ import CoreMedia
 import CoreVideo
 import os.lock
 
-/// H.264 video decoder - ultra-low-latency mode
+/// H.264 video decoder
 class H264Decoder: ObservableObject {
 
     // MARK: - Published Properties
@@ -29,56 +28,62 @@ class H264Decoder: ObservableObject {
     private var ppsData: Data?
     private var frameCount: Int = 0
     
-    // Use os_unfair_lock for minimal latency (faster than NSLock)
-    private var lock = os_unfair_lock()
+    private var sessionLock = os_unfair_lock()
     
-    // Frame drop monitoring
-    private var lastFrameTime: UInt64 = 0
-    private var droppedFrameCount: Int = 0
+    // Pre-allocated buffer for AVCC conversion
+    private var avccBuffer = Data(capacity: 512 * 1024)
 
     // MARK: - Configuration
 
     func processConfig(data: Data) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-        
         print("[H264Decoder] Processing CONFIG packet (\(data.count) bytes)")
 
         let nalUnits = parseAnnexBNALUnits(from: data)
 
+        var foundSPS: Data?
+        var foundPPS: Data?
+        
         for nalUnit in nalUnits {
             guard nalUnit.count > 0 else { continue }
             let nalType = nalUnit[0] & 0x1F
 
             switch nalType {
             case 7:
-                spsData = nalUnit
+                foundSPS = nalUnit
                 print("[H264Decoder] Found SPS (\(nalUnit.count) bytes)")
             case 8:
-                ppsData = nalUnit
+                foundPPS = nalUnit
                 print("[H264Decoder] Found PPS (\(nalUnit.count) bytes)")
             default:
                 break
             }
         }
 
-        if spsData != nil && ppsData != nil {
-            if decompressionSession != nil {
-                VTDecompressionSessionInvalidate(decompressionSession!)
+        guard let sps = foundSPS, let pps = foundPPS else { return }
+        
+        os_unfair_lock_lock(&sessionLock)
+        
+        let spsChanged = spsData != sps
+        let ppsChanged = ppsData != pps
+        
+        if spsChanged || ppsChanged {
+            spsData = sps
+            ppsData = pps
+            
+            if let session = decompressionSession {
+                VTDecompressionSessionInvalidate(session)
                 decompressionSession = nil
                 formatDescription = nil
             }
-            createDecompressionSession()
+            
+            createDecompressionSessionLocked()
         }
+        
+        os_unfair_lock_unlock(&sessionLock)
     }
 
-    private func createDecompressionSession() {
+    private func createDecompressionSessionLocked() {
         guard let spsData = spsData, let ppsData = ppsData else { return }
-
-        if let session = decompressionSession {
-            VTDecompressionSessionInvalidate(session)
-            decompressionSession = nil
-        }
 
         var formatDesc: CMVideoFormatDescription?
 
@@ -112,19 +117,19 @@ class H264Decoder: ObservableObject {
 
         var session: VTDecompressionSession?
         
-        // Optimized pixel buffer attributes for Metal rendering
+        // Pixel buffer attributes for Metal rendering
         let sessionAttributes: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
             kCVPixelBufferMetalCompatibilityKey: true,
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
         ]
 
-        // Require hardware acceleration for speed
+        // Request hardware acceleration
         let decoderSpec: [CFString: Any] = [
-            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true,
-            kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true
+            kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true
         ]
 
+        // SYNCHRONOUS callback - called on decode thread in frame order
         var callbackRecord = VTDecompressionOutputCallbackRecord()
         callbackRecord.decompressionOutputCallback = { (
             decompressionOutputRefCon, _, status, infoFlags, imageBuffer, pts, _
@@ -135,14 +140,11 @@ class H264Decoder: ObservableObject {
             
             let decoder = Unmanaged<H264Decoder>.fromOpaque(decoderPtr).takeUnretainedValue()
             
-            // Check if frame was dropped by decoder
             if infoFlags.contains(.frameDropped) {
-                decoder.droppedFrameCount += 1
                 return
             }
             
-            // Update frame immediately - no thread hopping for lowest latency
-            // The display layer will pick up the frame on next render cycle
+            // Direct update on main thread
             DispatchQueue.main.async {
                 decoder.latestFrame = imageBuffer
                 decoder.latestFramePTS = pts
@@ -164,30 +166,33 @@ class H264Decoder: ObservableObject {
             return
         }
 
-        // Enable real-time mode for immediate frame output
+        // Real-time mode
         VTSessionSetProperty(decompressionSession, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
-        
-        // Enable low-latency output ordering - frames delivered ASAP regardless of PTS order
-        VTSessionSetProperty(decompressionSession, key: kVTDecompressionPropertyKey_OutputPoolRequestedMinimumBufferCount, value: 1 as CFNumber)
 
         self.decompressionSession = decompressionSession
         
         DispatchQueue.main.async { self.isConfigured = true }
-        print("[H264Decoder] ✅ Session created (real-time, hardware accelerated, low-latency)")
+        print("[H264Decoder] ✅ Session created (real-time, hardware accelerated)")
     }
 
     // MARK: - Decoding
 
     func decode(data: Data) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(&sessionLock)
+        let session = decompressionSession
+        let format = formatDescription
+        os_unfair_lock_unlock(&sessionLock)
         
-        guard let decompressionSession = decompressionSession,
-              let formatDescription = formatDescription else {
+        guard let decompressionSession = session, let formatDescription = format else {
             return
         }
 
-        let avccData = convertAnnexBToAVCC(data)
+        // Convert Annex B to AVCC
+        convertAnnexBToAVCC(data)
+        
+        guard avccBuffer.count > 0 else { return }
+        
+        let avccData = avccBuffer
 
         var blockBuffer: CMBlockBuffer?
         var status = CMBlockBufferCreateWithMemoryBlock(
@@ -216,10 +221,11 @@ class H264Decoder: ObservableObject {
 
         var sampleBuffer: CMSampleBuffer?
         
-        // Use monotonically increasing timestamps for proper ordering
+        // Use frame count for monotonic timestamps
+        let pts = CMTime(value: Int64(frameCount), timescale: 60)
         var timingInfo = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: 120), // Support up to 120fps
-            presentationTimeStamp: CMTime(value: Int64(frameCount), timescale: 120),
+            duration: CMTime(value: 1, timescale: 60),
+            presentationTimeStamp: pts,
             decodeTimeStamp: .invalid
         )
 
@@ -237,19 +243,18 @@ class H264Decoder: ObservableObject {
 
         guard status == noErr, let sampleBuffer = sampleBuffer else { return }
 
-        // Use async decode for non-blocking operation
-        // EnableAsynchronousDecompression flag allows decoder to process in background
+        // SYNCHRONOUS decode to maintain frame order
         var flagsOut: VTDecodeInfoFlags = []
         let decodeStatus = VTDecompressionSessionDecodeFrame(
             decompressionSession,
             sampleBuffer: sampleBuffer,
-            flags: [._EnableAsynchronousDecompression, ._1xRealTimePlayback],
+            flags: [._1xRealTimePlayback],  // Synchronous, real-time
             frameRefcon: nil,
             infoFlagsOut: &flagsOut
         )
 
-        if decodeStatus != noErr {
-            print("[H264Decoder] Decode failed: \(decodeStatus)")
+        if decodeStatus != noErr && decodeStatus != kVTInvalidSessionErr {
+            print("[H264Decoder] Decode error: \(decodeStatus)")
         }
 
         frameCount += 1
@@ -291,30 +296,32 @@ class H264Decoder: ObservableObject {
         return nil
     }
 
-    private func convertAnnexBToAVCC(_ data: Data) -> Data {
-        var avccData = Data()
+    private func convertAnnexBToAVCC(_ data: Data) {
+        avccBuffer.removeAll(keepingCapacity: true)
         let nalUnits = parseAnnexBNALUnits(from: data)
         for nalUnit in nalUnits {
+            // Skip SPS/PPS in stream - we handle them separately
+            let nalType = nalUnit[0] & 0x1F
+            if nalType == 7 || nalType == 8 {
+                continue
+            }
             var length = UInt32(nalUnit.count).bigEndian
-            avccData.append(Data(bytes: &length, count: 4))
-            avccData.append(nalUnit)
+            avccBuffer.append(Data(bytes: &length, count: 4))
+            avccBuffer.append(nalUnit)
         }
-        return avccData
     }
 
     // MARK: - Lifecycle
     
     func prepareForDimensionChange(newDimensions: CGSize) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
         print("[H264Decoder] Dimension change to \(Int(newDimensions.width))x\(Int(newDimensions.height))")
     }
 
     func reset() {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(&sessionLock)
         
         if let session = decompressionSession {
+            VTDecompressionSessionWaitForAsynchronousFrames(session)
             VTDecompressionSessionInvalidate(session)
         }
         decompressionSession = nil
@@ -322,7 +329,8 @@ class H264Decoder: ObservableObject {
         spsData = nil
         ppsData = nil
         frameCount = 0
-        droppedFrameCount = 0
+        
+        os_unfair_lock_unlock(&sessionLock)
         
         DispatchQueue.main.async {
             self.latestFrame = nil
@@ -337,4 +345,3 @@ class H264Decoder: ObservableObject {
         }
     }
 }
-

@@ -2,8 +2,7 @@
 //  AACDecoder.swift
 //  ScreenReflect
 //
-//  Decodes and plays AAC/ADTS audio stream.
-//  Real-time optimized with increased buffer headroom.
+//  AAC/ADTS audio decoder with large buffers for smooth, crack-free audio.
 //
 
 import Foundation
@@ -11,14 +10,11 @@ import AVFoundation
 import AudioToolbox
 import os.log
 
-/// AAC/ADTS audio decoder - real-time mode
 class AACDecoder: ObservableObject {
 
     private let logger = Logger(subsystem: "com.screenreflect.ScreenReflect", category: "AACDecoder")
 
     @Published var isPlaying: Bool = false
-
-    // MARK: - Private Properties
 
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
@@ -37,32 +33,44 @@ class AACDecoder: ObservableObject {
         mReserved: 0
     )
 
-    private var pcmBuffer: UnsafeMutablePointer<UInt8>?
-    private let pcmBufferSize: UInt32 = 32768
-    
-    // Thread-safe buffer management
     private let lock = NSLock()
     
-    // Buffer management - increased headroom to prevent audio breaks
+    // Smaller buffer to sync audio ahead with video
     private var pendingBuffers: Int = 0
-    private let maxPendingBuffers: Int = 10  // Increased from 5 for more headroom
-
-    // MARK: - Initialization
+    private let maxPendingBuffers: Int = 8  // ~170ms buffer - sync with video
+    
+    // Pre-allocated buffers
+    private var inputBufferCapacity: Int = 8192
+    private var channelBufferCapacity: Int = 32768
+    private var reusableInputBuffer: UnsafeMutablePointer<UInt8>?
+    private var reusableLeftBuffer: UnsafeMutablePointer<UInt8>?
+    private var reusableRightBuffer: UnsafeMutablePointer<UInt8>?
+    
+    private var cachedAudioFormat: AVAudioFormat?
 
     init() {
-        pcmBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: Int(pcmBufferSize))
+        allocateBuffers()
         setupAudioEngine()
     }
-
-    // MARK: - Setup
+    
+    private func allocateBuffers() {
+        reusableInputBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: inputBufferCapacity)
+        reusableLeftBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: channelBufferCapacity)
+        reusableRightBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: channelBufferCapacity)
+        
+        cachedAudioFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48000.0,
+            channels: 2,
+            interleaved: false
+        )
+    }
 
     func setAudioSpecificConfig(data: Data) {
         lock.lock()
         defer { lock.unlock() }
         
-        logger.info("📡 Received AudioSpecificConfig (ADTS mode - will auto-configure)")
-        // With ADTS, we don't need the config - the ADTS header has all info
-        // But we use this signal to create the converter
+        logger.info("📡 Received AudioSpecificConfig (ADTS mode)")
         setupAudioConverter()
     }
     
@@ -72,13 +80,12 @@ class AACDecoder: ObservableObject {
             audioConverter = nil
         }
         
-        // ADTS input format - AudioConverter can parse ADTS headers
         var inFormat = AudioStreamBasicDescription(
             mSampleRate: 48000.0,
             mFormatID: kAudioFormatMPEG4AAC,
             mFormatFlags: 0,
-            mBytesPerPacket: 0,  // Variable
-            mFramesPerPacket: 1024,  // Standard AAC frame size
+            mBytesPerPacket: 0,
+            mFramesPerPacket: 1024,
             mBytesPerFrame: 0,
             mChannelsPerFrame: 2,
             mBitsPerChannel: 0,
@@ -93,7 +100,7 @@ class AACDecoder: ObservableObject {
         if status == noErr, let converter = newConverter {
             self.audioConverter = converter
             self.converterConfigured = true
-            logger.info("✅ Audio converter created for ADTS")
+            logger.info("✅ Audio converter created")
         } else {
             logger.error("❌ Failed to create audio converter: \(status)")
         }
@@ -107,12 +114,7 @@ class AACDecoder: ObservableObject {
 
         engine.attach(player)
 
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 48000.0,
-            channels: 2,
-            interleaved: false
-        ) else { return }
+        guard let format = cachedAudioFormat else { return }
 
         engine.connect(player, to: engine.mainMixerNode, format: format)
 
@@ -126,8 +128,6 @@ class AACDecoder: ObservableObject {
         pendingBuffers = 0
     }
 
-    // MARK: - Playback Control
-
     func start() {
         guard let player = playerNode, !player.isPlaying else { return }
         player.play()
@@ -140,20 +140,13 @@ class AACDecoder: ObservableObject {
         DispatchQueue.main.async { self.isPlaying = false }
     }
 
-    // MARK: - ADTS Parsing
-    
-    /// Strip ADTS header (7 bytes) and return raw AAC data
     private func stripAdtsHeader(_ data: Data) -> Data? {
-        // ADTS header is 7 bytes (or 9 with CRC)
         guard data.count >= 7 else { return nil }
         
-        // Check sync word (0xFFF)
         guard data[0] == 0xFF && (data[1] & 0xF0) == 0xF0 else {
-            // Not ADTS, return as-is (might be raw AAC)
             return data
         }
         
-        // Check if CRC is present (protection absent bit)
         let hasCRC = (data[1] & 0x01) == 0
         let headerSize = hasCRC ? 9 : 7
         
@@ -162,55 +155,47 @@ class AACDecoder: ObservableObject {
         return data.subdata(in: headerSize..<data.count)
     }
 
-    // MARK: - Decoding
-
     func decode(data: Data) {
         lock.lock()
         
-        // Buffer limiting - drop frames if too many pending to prevent audio delay
+        // Only drop if REALLY full (prevents cracks)
         if pendingBuffers >= maxPendingBuffers {
             lock.unlock()
             return
         }
         
-        lock.unlock()
-        
-        // Lazy setup converter on first decode
         if audioConverter == nil {
-            lock.lock()
             setupAudioConverter()
-            lock.unlock()
         }
         
-        // Auto-start playback
+        lock.unlock()
+        
         if let player = playerNode, !player.isPlaying {
             start()
         }
 
         guard let player = playerNode,
-              let converter = audioConverter else {
-            logger.warning("⚠️ Audio decode skipped: player=\(self.playerNode != nil), converter=\(self.audioConverter != nil)")
+              let converter = audioConverter,
+              let format = cachedAudioFormat,
+              let inputBuffer = reusableInputBuffer,
+              let leftBuffer = reusableLeftBuffer,
+              let rightBuffer = reusableRightBuffer else {
             return
         }
 
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 48000.0,
-            channels: 2,
-            interleaved: false
-        ) else {
-            logger.error("❌ Failed to create audio format")
-            return
-        }
-
-        // Strip ADTS header to get raw AAC data
-        guard let aacData = stripAdtsHeader(data) else {
-            logger.warning("⚠️ Failed to strip ADTS header from \(data.count) bytes")
-            return
+        guard let aacData = stripAdtsHeader(data) else { return }
+        
+        if aacData.count > inputBufferCapacity {
+            reusableInputBuffer?.deallocate()
+            inputBufferCapacity = aacData.count * 2
+            reusableInputBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: inputBufferCapacity)
+            guard let newBuffer = reusableInputBuffer else { return }
+            aacData.copyBytes(to: newBuffer, count: aacData.count)
+        } else {
+            aacData.copyBytes(to: inputBuffer, count: aacData.count)
         }
         
-        let inputBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: aacData.count)
-        aacData.copyBytes(to: inputBuffer, count: aacData.count)
+        let currentInputBuffer = reusableInputBuffer!
 
         let inputCallback: AudioConverterComplexInputDataProc = { (
             converter, ioNumberDataPackets, ioData, outDataPacketDescription, inUserData
@@ -228,7 +213,6 @@ class AACDecoder: ObservableObject {
             ioData.pointee.mBuffers.mDataByteSize = UInt32(context.data.count)
             ioData.pointee.mBuffers.mNumberChannels = 2
 
-            // Provide packet description for AAC
             if let packetDescPtr = outDataPacketDescription {
                 let packetDesc = UnsafeMutablePointer<AudioStreamPacketDescription>.allocate(capacity: 1)
                 packetDesc.pointee = AudioStreamPacketDescription(
@@ -244,20 +228,13 @@ class AACDecoder: ObservableObject {
             return noErr
         }
 
-        let context = AudioConverterContext(data: aacData, offset: 0, buffer: inputBuffer)
+        let context = AudioConverterContext(data: aacData, offset: 0, buffer: currentInputBuffer)
         let contextPtr = Unmanaged.passRetained(context).toOpaque()
         defer {
             Unmanaged<AudioConverterContext>.fromOpaque(contextPtr).release()
-            inputBuffer.deallocate()
         }
 
-        let channelBufferSize = pcmBufferSize / 2
-        let leftBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: Int(channelBufferSize))
-        let rightBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: Int(channelBufferSize))
-        defer {
-            leftBuffer.deallocate()
-            rightBuffer.deallocate()
-        }
+        let channelBufferSize = UInt32(channelBufferCapacity)
 
         var outputBufferList = AudioBufferList()
         outputBufferList.mNumberBuffers = 2
@@ -286,9 +263,6 @@ class AACDecoder: ObservableObject {
         )
 
         guard status == noErr, ioOutputDataPacketSize > 0 else {
-            if status != noErr {
-                logger.error("❌ AudioConverter failed with status: \(status)")
-            }
             return
         }
 
@@ -319,8 +293,6 @@ class AACDecoder: ObservableObject {
         }
     }
 
-    // MARK: - Helper Classes
-
     private class AudioConverterContext {
         let data: Data
         var offset: Int
@@ -332,8 +304,6 @@ class AACDecoder: ObservableObject {
             self.buffer = buffer
         }
     }
-
-    // MARK: - Reset
 
     func reset() {
         lock.lock()
@@ -359,6 +329,8 @@ class AACDecoder: ObservableObject {
         if let converter = audioConverter {
             AudioConverterDispose(converter)
         }
-        pcmBuffer?.deallocate()
+        reusableInputBuffer?.deallocate()
+        reusableLeftBuffer?.deallocate()
+        reusableRightBuffer?.deallocate()
     }
 }
